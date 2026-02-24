@@ -1,0 +1,30 @@
+{
+    "manifest_version": 3,
+    "name": "UoPeople Sync v3.2",
+    "version": "3.2",
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "storage",
+        "tabs",
+        "clipboardWrite",
+        "downloads"
+    ],
+    "host_permissions": [
+        "https://my.uopeople.edu/*"
+    ],
+    "action": {
+        "default_popup": "popup.html"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://my.uopeople.edu/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ]
+}

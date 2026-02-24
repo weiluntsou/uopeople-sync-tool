@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>UoPeople Sync v3.2</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            width: 330px;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            line-height: 1.5;
+        }
+
+        /* ── Header ── */
+        .header {
+            background: linear-gradient(135deg, #1e3a8a, #7c3aed);
+            padding: 13px 16px 11px;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+
+        .header h3 {
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .badge {
+            font-size: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 2px 7px;
+            border-radius: 20px;
+            margin-left: auto;
+        }
+
+        /* ── Sections ── */
+        .section {
+            padding: 11px 14px;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .section-title {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #64748b;
+            margin-bottom: 7px;
+        }
+
+        /* ── Buttons ── */
+        button {
+            width: 100%;
+            padding: 9px 12px;
+            cursor: pointer;
+            border: none;
+            border-radius: 7px;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.18s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            justify-content: center;
+            margin-bottom: 0;
+        }
+
+        #scanBtn {
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            color: white;
+        }
+
+        #scanBtn:hover:not(:disabled) {
+            filter: brightness(1.15);
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        /* Row of two buttons */
+        .btn-row {
+            display: flex;
+            gap: 7px;
+            margin-top: 7px;
+        }
+
+        .btn-row button {
+            margin: 0;
+        }
+
+        #copyBtn {
+            background: linear-gradient(135deg, #059669, #0891b2);
+            color: white;
+            flex: 1;
+        }
+
+        #copyBtn:hover:not(:disabled) {
+            filter: brightness(1.12);
+            transform: translateY(-1px);
+        }
+
+        #downloadBtn {
+            background: linear-gradient(135deg, #d97706, #dc2626);
+            color: white;
+            flex: 1;
+        }
+
+        #downloadBtn:hover:not(:disabled) {
+            filter: brightness(1.12);
+            transform: translateY(-1px);
+        }
+
+        /* ── Status ── */
+        .status {
+            background: #1e293b;
+            border-radius: 7px;
+            padding: 8px 11px;
+            font-size: 12px;
+            color: #94a3b8;
+            min-height: 36px;
+            margin-top: 8px;
+            line-height: 1.6;
+            white-space: pre-line;
+        }
+
+        /* ── Progress bar ── */
+        .progress-wrap {
+            display: none;
+            background: #1e293b;
+            border-radius: 20px;
+            height: 5px;
+            margin-top: 7px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #2563eb, #7c3aed);
+            border-radius: 20px;
+            width: 0%;
+            transition: width 0.4s ease;
+        }
+
+        /* ── Tags / stats ── */
+        .stats {
+            display: none;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 8px;
+        }
+
+        .stat-tag {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: #1e293b;
+            color: #94a3b8;
+        }
+
+        .stat-tag.green {
+            background: #064e3b;
+            color: #6ee7b7;
+        }
+
+        .stat-tag.blue {
+            background: #1e3a5f;
+            color: #93c5fd;
+        }
+
+        .stat-tag.amber {
+            background: #451a03;
+            color: #fcd34d;
+        }
+
+        /* ── Settings ── */
+        .settings {
+            padding: 11px 14px 14px;
+        }
+
+        input[type="password"],
+        input[type="text"] {
+            width: 100%;
+            padding: 7px 10px;
+            margin-bottom: 6px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            font-size: 12px;
+            outline: none;
+        }
+
+        input:focus {
+            border-color: #2563eb;
+        }
+
+        #saveBtn {
+            background: #334155;
+            color: #94a3b8;
+            font-size: 12px;
+            padding: 7px;
+        }
+
+        #saveBtn:hover {
+            background: #475569;
+            color: #e2e8f0;
+        }
+
+        .hint {
+            font-size: 10px;
+            color: #475569;
+            margin-bottom: 5px;
+        }
+
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <div class="header">
+        <span style="font-size:20px;">🎓</span>
+        <h3>UoPeople Sync</h3>
+        <span class="badge">v3.2</span>
+    </div>
+
+    <!-- Scan & Sync -->
+    <div class="section">
+        <div class="section-title">📡 Scan & Sync</div>
+        <button id="scanBtn">🔍 Deep Scan Course & Sync to Obsidian</button>
+        <div id="status" class="status">Waiting for command...</div>
+        <div class="progress-wrap" id="progressWrap">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <!-- Stats row shown after scan -->
+        <div class="stats" id="statsRow">
+            <span class="stat-tag green" id="statTasks">— tasks</span>
+            <span class="stat-tag blue" id="statLinks">— ext. links</span>
+            <span class="stat-tag amber" id="statFiles">— UoP files</span>
+        </div>
+    </div>
+
+    <!-- Actions (enabled after scan) -->
+    <div class="section">
+        <div class="section-title">⚡ Actions</div>
+        <div class="btn-row">
+            <button id="copyBtn" disabled title="Copy all external Reading URLs to clipboard for NotebookLM">
+                📋 Copy Reading Links
+            </button>
+            <button id="downloadBtn" disabled
+                title="Bulk download all UoPeople internal files using your login session">
+                ⬇️ Download UoP Files
+            </button>
+        </div>
+        <div id="actionStatus" class="status" style="display:none;"></div>
+    </div>
+
+    <!-- Obsidian API Settings -->
+    <div class="settings">
+        <div class="section-title">⚙️ Settings</div>
+        <p class="hint">Obsidian Local REST API key</p>
+        <input type="password" id="apiKeyInput" placeholder="Paste your Obsidian API Key here">
+        <button id="saveBtn">💾 Save Key</button>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
