@@ -1,7 +1,13 @@
 {
     "manifest_version": 3,
-    "name": "UoPeople Sync v3.2",
+    "name": "UoPeople Sync",
     "version": "3.2",
+    "description": "Auto-scan UoPeople courses, sync structured notes to Obsidian, and generate NotebookLM prompts in one click.",
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
     "permissions": [
         "activeTab",
         "scripting",
@@ -14,7 +20,12 @@
         "https://my.uopeople.edu/*"
     ],
     "action": {
-        "default_popup": "popup.html"
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        }
     },
     "content_scripts": [
         {
