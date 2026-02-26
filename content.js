@@ -21,6 +21,126 @@ function resolveUrl(href, baseUrl) {
 }
 
 // ─────────────────────────────────────────────
+// Helper: walk next siblings to find a UL or OL
+// ─────────────────────────────────────────────
+function findNextListSibling(el) {
+    let sib = el?.nextElementSibling;
+    let steps = 0;
+    while (sib && steps < 5) {
+        const tag = sib.tagName.toUpperCase();
+        if (tag === "UL" || tag === "OL") return sib;
+        const sibText = (sib.textContent || "").trim();
+        if (sibText.length > 0 && !["BR", "HR"].includes(tag)) break;
+        sib = sib.nextElementSibling;
+        steps++;
+    }
+    return null;
+}
+
+// ─────────────────────────────────────────────
+// 在 DOMParser 離線文件中找出特定標題後的列表項目
+// 支援：<ul>/<ol> 列表、純 <p> 段落列表、文字 regex 三種格式
+// ─────────────────────────────────────────────
+function extractListFromOfflineDoc(containerEl, headingPattern) {
+    if (!containerEl) return [];
+
+    // ── Strategy A: scan all elements sequentially (state machine) ──
+    // Handles both <li> items AND <p> paragraphs after a matching heading.
+    // Stops when it hits a new heading that does NOT match the pattern.
+    const all = Array.from(containerEl.querySelectorAll(
+        "h1,h2,h3,h4,h5,h6,p,li,strong,b"
+    ));
+    let capturing = false;
+    const items = [];
+
+    for (const el of all) {
+        // Skip elements nested inside a <li> that aren’t themselves a <li>
+        // (avoids false positives from inline spans/strongs inside list items)
+        const tag = el.tagName.toUpperCase();
+        if (tag !== "LI" && el.closest("li")) continue;
+
+        const text = (el.textContent || "").trim();
+        if (!text) continue;
+
+        // Is this element a heading-like element?
+        const isHeadingTag = ["H1", "H2", "H3", "H4", "H5", "H6"].includes(tag);
+        const isInlineLabel = ["STRONG", "B"].includes(tag) && text.length <= 100 && !el.closest("li");
+        const isPLabel = tag === "P" && text.length <= 120 && !el.closest("li");
+        const isHeading = isHeadingTag || isInlineLabel || isPLabel;
+
+        if (isHeading) {
+            if (headingPattern.test(text)) {
+                // Start capturing after this heading
+                capturing = true;
+                items.length = 0; // reset in case we had a false match earlier
+                continue;
+            } else if (capturing && (isHeadingTag || isInlineLabel)) {
+                // Hit a DIFFERENT proper heading while capturing → stop
+                break;
+            }
+        }
+
+        if (!capturing) continue;
+
+        // Collect list items
+        if (tag === "LI") {
+            const clone = el.cloneNode(true);
+            clone.querySelectorAll("ul,ol").forEach(n => n.remove());
+            const t = (clone.textContent || "").trim().replace(/^[\u2022\-\*]\s*/, "");
+            if (t.length > 3) items.push(t);
+        }
+        // Also collect short <p> tags that look like list entries
+        else if (tag === "P" && !isHeading) {
+            // Only if it isn’t a known section-header pattern
+            if (text.length > 3 && text.length < 300 &&
+                !headingPattern.test(text) &&
+                !/^(topics?|learning\s+outcomes?|by\s+the\s+end)/i.test(text)) {
+                items.push(text.replace(/^[\u2022\-\*\d\.\)]\s*/, ""));
+            }
+        }
+    }
+    if (items.length > 0) return items;
+
+    // ── Strategy B: heading → next sibling UL/OL ──
+    const candidates = Array.from(
+        containerEl.querySelectorAll("h1,h2,h3,h4,h5,h6,p,strong,b")
+    );
+    for (const el of candidates) {
+        const elText = (el.textContent || "").trim();
+        if (elText.length > 120 || !headingPattern.test(elText)) continue;
+        if (el.closest("li")) continue;
+
+        const list = findNextListSibling(el) || findNextListSibling(el.parentElement);
+        if (list) {
+            const listItems = Array.from(list.querySelectorAll(":scope > li"))
+                .map(li => {
+                    const clone = li.cloneNode(true);
+                    clone.querySelectorAll("ul,ol").forEach(n => n.remove());
+                    return (clone.textContent || "").trim();
+                })
+                .filter(t => t.length > 3);
+            if (listItems.length > 0) return listItems;
+        }
+    }
+
+    // ── Strategy C: regex on plain text ──
+    const fullText = containerEl.textContent || "";
+    const match = fullText.match(
+        new RegExp(headingPattern.source + "[s]?\\s*[:\\n]?([\\s\\S]{0,800})", "i")
+    );
+    if (match) {
+        const extracted = match[1]
+            .split(/\n/)
+            .map(l => l.replace(/^[\u2022\-\*\d\.\)]\s*/, "").trim())
+            .filter(l => l.length > 5 && !/^(topics?|learning|outcome|by\s+the\s+end)/i.test(l))
+            .slice(0, 10);
+        if (extracted.length > 0) return extracted;
+    }
+
+    return [];
+}
+
+// ─────────────────────────────────────────────
 // 判斷是否為 Reading Assignment 類型的頁面
 // ─────────────────────────────────────────────
 function isReadingAssignmentPage(title, url) {
@@ -124,23 +244,67 @@ async function fetchReadingPage(bookUrl) {
         }
         if (!contentArea) contentArea = finalDoc.body;
 
-        // ── Step 3：抓取超連結（教材連結）──
-        const links = Array.from(contentArea.querySelectorAll("a"))
-            .map((a) => ({
-                text: getText(a).trim(),
-                href: resolveUrl(a.getAttribute("href") || "", finalUrl),
-            }))
-            .filter(
-                ({ text, href }) =>
-                    href.startsWith("http") &&
-                    !href.includes("/mod/book") &&
-                    !href.includes("javascript:") &&
-                    text.length > 2
-            )
-            .map(({ text, href }) => `- [${text}](${href})`);
+        // ── Step 3：抓取超連結（教材連結）+ 影片連結 ──
 
-        if (links.length > 0) {
-            return `#### 📚 Reading Assignment List\n${links.join("\n")}`;
+        // 判斷連結是否為影片平台
+        const isVideoUrl = (url) =>
+            /youtube\.com|youtu\.be|kaltura|kaf\.|vimeo\.com|loom\.com|wistia\.com|brightcove|mediasite|panopto|ted\.com\/talks/i.test(url);
+
+        // 判斷 iframe src 是否為影片嵌入
+        const isVideoEmbed = (src) =>
+            /youtube\.com\/embed|youtu\.be|player\.vimeo|kaltura|kaf\.|panopto|loom\.com\/embed|brightcove/i.test(src);
+
+        // 將 YouTube embed URL 轉換為可觀看的完整 URL
+        const normalizeVideoUrl = (src) => {
+            const ytEmbed = src.match(/youtube\.com\/embed\/([A-Za-z0-9_-]+)/);
+            if (ytEmbed) return `https://www.youtube.com/watch?v=${ytEmbed[1]}`;
+            const kaftEmbed = src.match(/youtu\.be\/([A-Za-z0-9_-]+)/);
+            if (kaftEmbed) return `https://www.youtube.com/watch?v=${kaftEmbed[1]}`;
+            return src.split("?")[0]; // strip query params for cleaner URL
+        };
+
+        const entries = [];
+        const seenHrefs = new Set();
+
+        // 3a. 一般 <a> 超連結
+        Array.from(contentArea.querySelectorAll("a")).forEach((a) => {
+            const text = getText(a).trim();
+            const href = resolveUrl(a.getAttribute("href") || "", finalUrl);
+            if (!href.startsWith("http")) return;
+            if (href.includes("/mod/book") || href.includes("javascript:")) return;
+            if (text.length < 2) return;
+            if (seenHrefs.has(href)) return;
+            seenHrefs.add(href);
+            const icon = isVideoUrl(href) ? "🎥" : "📄";
+            entries.push(`- ${icon} [${text}](${href})`);
+        });
+
+        // 3b. <iframe> 嵌入影片（YouTube、Kaltura、Vimeo 等）
+        Array.from(contentArea.querySelectorAll("iframe")).forEach((iframe) => {
+            const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
+            const fullSrc = resolveUrl(src, finalUrl);
+            if (!fullSrc.startsWith("http")) return;
+            if (!isVideoEmbed(fullSrc)) return;
+            if (seenHrefs.has(fullSrc)) return;
+            seenHrefs.add(fullSrc);
+            const watchUrl = normalizeVideoUrl(fullSrc);
+            const titleAttr = iframe.getAttribute("title") || iframe.getAttribute("name") || "";
+            const label = titleAttr.trim() || "Embedded Video";
+            entries.push(`- 🎥 [${label}](${watchUrl})`);
+        });
+
+        // 3c. <video> 或 <source> 直連影片檔
+        Array.from(contentArea.querySelectorAll("video, video source")).forEach((el) => {
+            const src = el.getAttribute("src") || "";
+            const fullSrc = resolveUrl(src, finalUrl);
+            if (!fullSrc.startsWith("http") || seenHrefs.has(fullSrc)) return;
+            seenHrefs.add(fullSrc);
+            const label = el.closest("[title]")?.getAttribute("title") || "Video";
+            entries.push(`- 🎥 [${label}](${fullSrc})`);
+        });
+
+        if (entries.length > 0) {
+            return `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
         }
 
         // ── Step 4：無連結時，抓取純文字內容 ──
@@ -160,12 +324,115 @@ async function fetchReadingPage(bookUrl) {
 }
 
 // ─────────────────────────────────────────────
+// 從 Learning Guide 的 Overview 章節抓取 Topics + Learning Outcomes
+// ─────────────────────────────────────────────
+async function fetchOverviewMetadata(bookUrl) {
+    try {
+        const baseUrl = bookUrl.replace(/([&?])chapterid=\d+/i, "");
+
+        // 選取書本內容區域 (by priority, 避免拹到 navbar)
+        const CONTENT_SELECTORS = [
+            "#region-main .book_content",
+            ".book_content",
+            "#region-main article",
+            "#region-main [role='main']",
+            "#region-main",
+        ];
+
+        // ─── Post-process helper ─────────────────────────────────────
+        // 1. Stop when hitting a "Tasks / Checklist" section
+        // 2. Split merged LO sentences at ". " boundaries
+        // 3. Deduplicate
+        const STOP_PATTERNS = /^(tasks?|checklist|activ|note|important|prerequisite|resource)[\s:]*$/i;
+        const TASK_ITEM_SUFFIX = /^(read\s+through|complete\s+and|take\s+and|submit\s+the|log\s+on|watch\s+the|post\s+your|respond\s+to)/i;
+        const cleanExtracted = (items, splitSentences) => {
+            const result = [];
+            for (const raw of items) {
+                const item = raw.trim();
+                if (!item || item.length < 4) continue;
+                if (STOP_PATTERNS.test(item) || TASK_ITEM_SUFFIX.test(item)) break;
+                if (splitSentences && item.length > 100) {
+                    const parts = item.split(/\.\s+(?=[A-Z][a-z])/);
+                    if (parts.length > 1) {
+                        parts.forEach(p => {
+                            const c = p.replace(/\.\s*$/, "").trim();
+                            if (c.length > 8) result.push(c);
+                        });
+                        continue;
+                    }
+                }
+                result.push(item);
+            }
+            return [...new Set(result)];
+        };
+
+        const fetchAndParse = async (url) => {
+            const r = await fetch(url, { credentials: "include" });
+            if (!r.ok) return null;
+            const html = await r.text();
+            const d = new DOMParser().parseFromString(html, "text/html");
+
+            let content = null;
+            for (const sel of CONTENT_SELECTORS) {
+                const el = d.querySelector(sel);
+                if (el && (el.textContent || "").trim().length > 50) { content = el; break; }
+            }
+            if (!content) content = d.body;
+
+            const pageTitle = getText(d.querySelector("h1, h2, .page-header-headings"));
+            console.log(`📊 [Overview] URL: ${url}`);
+            console.log(`📊 [Overview] Title: "${pageTitle}" | Selector: ${content === d.body ? "body" : CONTENT_SELECTORS.find(s => d.querySelector(s) === content) || "?"}`);
+            console.log(`📊 [Overview] innerHTML (800): ${(content.innerHTML || "").substring(0, 800)}`);
+
+            const topics = cleanExtracted(extractListFromOfflineDoc(content, /topics?/i), false);
+            const outcomes = cleanExtracted(extractListFromOfflineDoc(content, /learning\s+outcomes?/i), true);
+
+            console.log(`📊 [Overview] Topics (clean): [${topics.join(" | ")}]`);
+            console.log(`📊 [Overview] Outcomes (clean): [${outcomes.join(" | ")}]`);
+
+            return { topics, outcomes, doc: d };
+        };
+
+        // ① 先試書本起始頁
+        const base = await fetchAndParse(baseUrl);
+        if (!base) return { topics: [], outcomes: [] };
+        if (base.topics.length > 0 || base.outcomes.length > 0) {
+            return { topics: base.topics, outcomes: base.outcomes };
+        }
+
+        // ② 從 doc 中找所有含 chapterid=... 的 <a> 連結（書本章節指定樣式）
+        const chapLinks = Array.from(base.doc.querySelectorAll("a[href*='chapterid']"));
+        console.log(`📊 [Overview] Book chapter links: ${chapLinks.map(a => `"${a.textContent.trim()}"→${a.getAttribute('href')}`).join(" | ")}`);
+
+        // 尋找 Overview 或 Introduction 章節
+        const chapLink =
+            chapLinks.find(a => /^overview$/i.test(a.textContent.trim())) ||
+            chapLinks.find(a => /overview/i.test(a.textContent)) ||
+            chapLinks.find(a => /introduction/i.test(a.textContent)) ||
+            chapLinks[0];
+
+        if (chapLink) {
+            const chUrl = resolveUrl(chapLink.getAttribute("href") || "", baseUrl);
+            if (chUrl !== baseUrl) {
+                const ch = await fetchAndParse(chUrl);
+                if (ch) return { topics: ch.topics, outcomes: ch.outcomes };
+            }
+        }
+
+        return { topics: [], outcomes: [] };
+    } catch (e) {
+        console.warn("fetchOverviewMetadata error:", e.message);
+        return { topics: [], outcomes: [] };
+    }
+}
+
+// ─────────────────────────────────────────────
 // 抓取任務詳情（深度抓取）
 // ─────────────────────────────────────────────
 async function fetchDeepDetail(url, title) {
     try {
         const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A" };
+        if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A", topics: [], outcomes: [] };
         const html = await res.text();
         const doc = new DOMParser().parseFromString(html, "text/html");
 
@@ -179,34 +446,39 @@ async function fetchDeepDetail(url, title) {
             : "N/A";
 
         let detail = "";
+        let topics = [];
+        let outcomes = [];
 
-        // ── 判斷是否為 Reading Assignment 類型 ──
+        // ── 判斷是否為 Reading Assignment / Learning Guide 類型 ──
         if (isReadingAssignmentPage(title, url)) {
-            console.log(`📖 識別為 Reading 類型：${title} (${url})`);
-            detail = await fetchReadingPage(url);
+            console.log(`📖 識別為 Reading 類型：${title}`);
+            // 並行抓取：Reading 連結清單 + Overview 的 Topics/Outcomes
+            const [readingDetail, overviewMeta] = await Promise.all([
+                fetchReadingPage(url),
+                fetchOverviewMetadata(url),
+            ]);
+            detail = readingDetail;
+            topics = overviewMeta.topics;
+            outcomes = overviewMeta.outcomes;
         } else {
             // 一般任務（Discussion、Assignment 等）
             const bodySelectors = [
-                ".post-content",
-                "#intro",
-                ".no-overflow",
-                ".generalbox",
-                ".page-content",
-                ".box.py-3",
+                ".post-content", "#intro", ".no-overflow",
+                ".generalbox", ".page-content", ".box.py-3",
             ];
             let bodyEl = null;
             for (const sel of bodySelectors) {
                 bodyEl = doc.querySelector(sel);
                 if (bodyEl) break;
             }
-            const rawText = bodyEl ? getText(bodyEl).substring(0, 600) : "無詳細內容";
+            const rawText = bodyEl ? getText(bodyEl).substring(0, 600) : "No content";
             detail = `> ${rawText.replace(/\n/g, "\n> ")}`;
         }
 
-        return { detail, deadline };
+        return { detail, deadline, topics, outcomes };
     } catch (e) {
         console.error("fetchDeepDetail error:", e);
-        return { detail: `❌ 抓取失敗：${e.message}`, deadline: "N/A" };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [] };
     }
 }
 
@@ -333,16 +605,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 }
             });
 
-            // ── 深度抓取每個任務 ──
+            // ── 深度抓取每個任務，同時收集 Learning Guide 的 Topics/Outcomes ──
             const results = [];
+            // 先複製主頁面 section summary 抓到的 unitDetails
+            const enrichedUnitDetails = {};
+            for (const [, data] of Object.entries(unitMap)) {
+                if (typeof data === "object" && data.name) {
+                    enrichedUnitDetails[data.name] = {
+                        topics: data.topics || [],
+                        outcomes: data.outcomes || [],
+                    };
+                }
+            }
+
             for (const task of tasks) {
                 console.log(`🔍 抓取：${task.title}`);
                 const extra = await fetchDeepDetail(task.url, task.title);
                 const unitData = unitMap[task.unitId] || { name: "General", topics: [], outcomes: [] };
+                const unitName = typeof unitData === "string" ? unitData : unitData.name;
+
+                // 如果 Learning Guide 的 Overview 回傳了 Topics/Outcomes，
+                // 用它來補強（或覆蓋）該週的 unitDetails
+                if (extra.topics?.length > 0 || extra.outcomes?.length > 0) {
+                    if (!enrichedUnitDetails[unitName]) {
+                        enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+                    }
+                    if (extra.topics.length > 0)
+                        enrichedUnitDetails[unitName].topics = extra.topics;
+                    if (extra.outcomes.length > 0)
+                        enrichedUnitDetails[unitName].outcomes = extra.outcomes;
+                }
+
                 results.push({
                     ...task,
-                    ...extra,
-                    unitTime: typeof unitData === "string" ? unitData : unitData.name,
+                    detail: extra.detail,
+                    deadline: extra.deadline,
+                    unitTime: unitName,
                     type: task.url.includes("forum")
                         ? "Discussion"
                         : task.url.includes("assign")
@@ -353,22 +651,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 });
             }
 
-            // Build a clean unitDetails map for popup (keyed by unit name)
-            const unitDetails = {};
-            for (const [, data] of Object.entries(unitMap)) {
-                if (typeof data === "object" && data.name) {
-                    unitDetails[data.name] = {
-                        topics: data.topics || [],
-                        outcomes: data.outcomes || [],
-                    };
-                }
-            }
-
             sendResponse({
                 action: "final",
                 courseName: cleanMD(courseName),
                 results,
-                unitDetails,   // { "Week 1: ..." : { topics: [], outcomes: [] }, ... }
+                unitDetails: enrichedUnitDetails,
             });
         })();
         return true; // 保持非同步 channel 開啟

@@ -160,23 +160,21 @@ function categorizeUrls(results) {
     const internal = new Set();
 
     for (const item of results) {
-        // Parse markdown links from detail text
+        // Parse ALL markdown links from detail text (handles emoji like 🎥 📄 in label)
         if (item.detail) {
-            for (const m of item.detail.matchAll(/\[.*?\]\((https?:\/\/[^)]+)\)/g)) {
+            for (const m of item.detail.matchAll(/\[[\s\S]*?\]\((https?:\/\/[^)]+)\)/g)) {
                 const url = m[1];
                 if (isUoPeopleFile(url)) {
                     internal.add(url);
                 } else if (!url.includes("my.uopeople.edu")) {
-                    external.add(url);
+                    external.add(url);   // includes YouTube, Vimeo, Kaltura, etc.
                 }
             }
         }
 
-        // Reading module URL itself → internal (needs login)
-        if (item.type === "Reading") {
-            // The book module page itself is navigational; skip it for downloads.
-            // Only add if it looks like a direct file.
-            if (isUoPeopleFile(item.url)) internal.add(item.url);
+        // Reading module URL itself → internal only if it's a downloadable file
+        if (item.type === "Reading" && isUoPeopleFile(item.url)) {
+            internal.add(item.url);
         }
     }
 
@@ -185,6 +183,7 @@ function categorizeUrls(results) {
 
 // Returns true for UoPeople URLs that are likely downloadable files
 // (pluginfile.php = Moodle's file-serving endpoint, or has a file extension)
+// Note: YouTube/Vimeo/Kaltura hosted on external domains are NOT UoPeople files.
 function isUoPeopleFile(url) {
     if (!url.includes("my.uopeople.edu")) return false;
     const fileExtensions = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|zip|mp4|mp3|png|jpg|jpeg|gif)(\?|$)/i;
@@ -348,7 +347,7 @@ function buildWeeklySummaryTable(results) {
     return table;
 }
 
-// NotebookLM Prompt (English) — anchored to Topics & Learning Outcomes
+// NotebookLM Prompt — Professional Instructional Design format
 function buildNotebookLMPrompt(course, results, details) {
     const ud = details || {};
 
@@ -362,84 +361,119 @@ function buildNotebookLMPrompt(course, results, details) {
         else if (item.type === "Assignment") unitMap[unit].assignments.push(item);
     }
 
-    // Build per-unit data block, leading with Topics → Learning Outcomes → Tasks
-    let weekInfo = "";
-    for (const [unit, data] of Object.entries(unitMap)) {
-        weekInfo += `\n=== ${unit} ===\n`;
+    // Build one prompt block per unit
+    const blocks = [];
 
+    for (const [unit, data] of Object.entries(unitMap)) {
         const meta = ud[unit] || {};
         const topics = meta.topics || [];
         const outcomes = meta.outcomes || [];
 
-        // ① Topics (extracted from the course page section summary)
+        // Topics block
+        let topicsBlock = "";
         if (topics.length > 0) {
-            weekInfo += `\nTopics:\n`;
-            topics.forEach(t => { weekInfo += `  - ${t}\n`; });
+            topicsBlock = topics.map(t => `  - $${t}$`).join("\n");
         } else {
-            // Fallback: use reading material titles as topic hints
-            const hints = data.readings.map(r => r.title).join("; ");
-            if (hints) weekInfo += `\nReading Materials (no Topics extracted): ${hints}\n`;
+            const hints = data.readings.map(r => r.title).join(", ");
+            topicsBlock = hints ? `  (derived from readings: ${hints})` : "  (not extracted — check Learning Guide Overview)";
         }
 
-        // ② Learning Outcomes
-        if (outcomes.length > 0) {
-            weekInfo += `\nLearning Outcomes (students will be able to):\n`;
-            outcomes.forEach(o => { weekInfo += `  - ${o}\n`; });
-        }
+        // Learning Outcomes block
+        let outcomesBlock = outcomes.length > 0
+            ? outcomes.map(o => `  • ${o}`).join("\n")
+            : "  (not extracted — check Learning Guide Overview)";
 
-        // ③ Discussion & Assignment context
-        if (data.discussions.length > 0) {
-            weekInfo += `\nDiscussion Prompt(s):\n`;
-            data.discussions.forEach(d => { weekInfo += `  - ${d.title}\n`; });
-        }
-        if (data.assignments.length > 0) {
-            weekInfo += `\nAssignment(s):\n`;
-            data.assignments.forEach(a => { weekInfo += `  - ${a.title}\n`; });
-        }
+        // Discussion Prompts block
+        let discussBlock = data.discussions.length > 0
+            ? data.discussions.map(d => `  • "${d.title}"`).join("\n")
+            : "  (none this unit)";
+
+        // Assignments block
+        let assignBlock = data.assignments.length > 0
+            ? data.assignments.map(a => `  • ${a.title}`).join("\n")
+            : "  (none this unit)";
+
+        // Key technical terms from topics (for $term$ emphasis)
+        const keyTerms = topics.slice(0, 4).map(t => `$${t.split(/[(),:]/)[0].trim()}$`).join(", ") || "$key concept$";
+
+        blocks.push(
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 PROMPT FOR: ${unit}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Role: Professional Instructional Designer & Senior Teaching Assistant.
+
+Task: Generate an 8–12 minute Educational Video Overview based on the "${course}" curriculum.
+
+───────────────────────────────────────
+Instructions for the Video Engine:
+───────────────────────────────────────
+
+Scope: Focus exclusively on the content for [${unit}].
+
+Narration Style: Use clear, academic, yet engaging English. Avoid overly robotic phrasing.
+Use phrases like "Let's dive into...", "Consider this analogy...", and "The takeaway here is...".
+
+Structure & Visual Emphasis:
+
+  🎬 Introduction (1 min):
+     Start with a high-level real-world problem that motivates this week's content.
+     Introduce the Weekly Topics and Learning Outcomes listed below.
+
+  📚 Deep Dive (5–6 mins):
+     For each topic (${keyTerms}), explain:
+       1. The Mechanism — what it is and how it works
+       2. The Impact — why it matters for system/real-world performance
+     Use the provided sources to reference specific details, architectures, or algorithms.
+
+  💬 Critical Thinking Section (2–3 mins):
+     Address the Discussion Prompt below.
+     Instead of giving direct answers, provide a Decision Matrix:
+       "When evaluating [the topic], consider these 3 factors..."
+     Help students build their own reasoning framework.
+
+  📝 Practical Guidance (1–2 mins):
+     Explicitly mention the Assignment Activity listed below.
+     Walk through the technical requirements and highlight common student errors.
+
+  🎯 Wrap-up (1 min):
+     Synthesize the Learning Outcomes into a "Big Picture" summary.
+     Remind students which outcomes they have now achieved.
+
+Technical Constraints:
+  - Ground every explanation in the uploaded source documents in this notebook.
+  - If sources discuss specific code or algorithms, ensure the video highlights those details.
+  - Maintain pacing that allows complex concepts to be absorbed — do not rush critical sections.
+  - Use $technical terms$ in the video script wherever you reference core concepts.
+
+───────────────────────────────────────
+Input Data for this Video:
+───────────────────────────────────────
+
+Topics:
+${topicsBlock}
+
+Learning Outcomes (students will be able to):
+${outcomesBlock}
+
+Discussion Prompt(s):
+${discussBlock}
+
+Assignment Activity:
+${assignBlock}`
+        );
     }
 
-    return `You are a professional online course instructional designer and teaching assistant for "${course}".
-
-Using the sources added to this notebook AND the structured course data below, generate a complete narration script for an 8–12 minute teaching video.
-
-## Weekly Course Data
-${weekInfo.trim()}
-
----
-
-## Output Format
-
-Produce the full script in the sections below. Every explanation must be grounded in the Topics and Learning Outcomes listed above.
-
-**🎬 Introduction (approx. 60 seconds)**
-(Warm greeting + list this week's Topics + state the Learning Outcomes students will achieve)
-
-**📚 Core Concept Explanations (approx. 4–5 minutes)**
-(Explain each Topic clearly and at a university-student level.
-For each Topic, explicitly connect it to the corresponding Learning Outcome.
-Use real-world examples or analogies where helpful.)
-
-**💬 Discussion Prompt Walkthrough (approx. 2–3 minutes)**
-(Break down the discussion question(s). Offer a structured thinking framework.
-Do NOT write the answer — give 2–3 angles students can explore, linking each to a Learning Outcome.)
-
-**📝 Assignment Guidance (approx. 2 minutes)**
-(Clarify requirements, flag common mistakes, and highlight grading criteria.)
-
-**🎯 Closing & Reminders (approx. 60 seconds)**
-(Confirm which Learning Outcomes students have now achieved + deadline reminders + encouragement)
-
----
-
-**📊 Weekly PPT Slide Outline**
-(One slide per Topic; title + 3 bullet points per slide. Include a title slide and a closing/summary slide.)
-
----
-
-Write in clear, friendly English suitable for university students.`;
+    return blocks.join("\n\n\n");
 }
 
 // ─────────────────────────────────────────────────
+
+
+
+
+// ─────────────────────────────────────────────────
+
 
 // Upload full note to Obsidian
 // ─────────────────────────────────────────────────
