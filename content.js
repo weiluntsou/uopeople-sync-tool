@@ -165,7 +165,6 @@ async function fetchReadingPage(bookUrl) {
         const html = await res.text();
         const doc = new DOMParser().parseFromString(html, "text/html");
 
-        // ── Step 1：在目錄 (TOC) 中尋找 "Reading Assignment" 的章節連結 ──
         const tocSelectors = [
             ".book_toc a",
             ".list-group-item a",
@@ -177,75 +176,6 @@ async function fetchReadingPage(bookUrl) {
             doc.querySelectorAll(tocSelectors.join(", "))
         );
 
-        // 找到符合 "Reading Assignment" 的章節頁連結
-        const targetLink = tocLinks.find((a) => {
-            const text = getText(a);
-            return /Reading\s*Assignment/i.test(text);
-        });
-
-        let finalDoc = doc;
-        let finalUrl = bookUrl;
-
-        if (targetLink) {
-            const rawHref = targetLink.getAttribute("href") || "";
-            const chapterUrl = resolveUrl(rawHref, bookUrl);
-            console.log("📖 找到 Reading Assignment 章節:", chapterUrl);
-            const res2 = await fetch(chapterUrl, { credentials: "include" });
-            if (res2.ok) {
-                const html2 = await res2.text();
-                finalDoc = new DOMParser().parseFromString(html2, "text/html");
-                finalUrl = chapterUrl;
-            }
-        } else {
-            // 嘗試尋找「第一章」或書中所有章節，選取含有 reading 字樣最多的那頁
-            console.log("⚠️ TOC 中未找到 Reading Assignment，嘗試掃描所有章節...");
-            const allChapters = Array.from(
-                doc.querySelectorAll(".book_toc a, .chapter a, .list-group-item a")
-            );
-            for (const ch of allChapters) {
-                const rawHref = ch.getAttribute("href") || "";
-                if (!rawHref) continue;
-                const chUrl = resolveUrl(rawHref, bookUrl);
-                try {
-                    const r = await fetch(chUrl, { credentials: "include" });
-                    if (!r.ok) continue;
-                    const h = await r.text();
-                    const d = new DOMParser().parseFromString(h, "text/html");
-                    const content = d.querySelector(
-                        ".book_content, .no-overflow, .generalbox"
-                    );
-                    if (content) {
-                        const contentText = getText(content);
-                        if (/reading/i.test(contentText) && contentText.length > 100) {
-                            finalDoc = d;
-                            finalUrl = chUrl;
-                            break;
-                        }
-                    }
-                } catch {
-                    continue;
-                }
-            }
-        }
-
-        // ── Step 2：鎖定內容區域 ──
-        const contentSelectors = [
-            ".book_content",
-            ".no-overflow",
-            ".generalbox",
-            "#page-content",
-            ".box.py-3",
-            "main",
-        ];
-        let contentArea = null;
-        for (const sel of contentSelectors) {
-            contentArea = finalDoc.querySelector(sel);
-            if (contentArea) break;
-        }
-        if (!contentArea) contentArea = finalDoc.body;
-
-        // ── Step 3：抓取超連結（教材連結）+ 影片連結 ──
-
         // 判斷連結是否為影片平台
         const isVideoUrl = (url) =>
             /youtube\.com|youtu\.be|kaltura|kaf\.|vimeo\.com|loom\.com|wistia\.com|brightcove|mediasite|panopto|ted\.com\/talks/i.test(url);
@@ -254,66 +184,132 @@ async function fetchReadingPage(bookUrl) {
         const isVideoEmbed = (src) =>
             /youtube\.com\/embed|youtu\.be|player\.vimeo|kaltura|kaf\.|panopto|loom\.com\/embed|brightcove/i.test(src);
 
-        // 將 YouTube embed URL 轉換為可觀看的完整 URL
         const normalizeVideoUrl = (src) => {
             const ytEmbed = src.match(/youtube\.com\/embed\/([A-Za-z0-9_-]+)/);
             if (ytEmbed) return `https://www.youtube.com/watch?v=${ytEmbed[1]}`;
             const kaftEmbed = src.match(/youtu\.be\/([A-Za-z0-9_-]+)/);
             if (kaftEmbed) return `https://www.youtube.com/watch?v=${kaftEmbed[1]}`;
-            return src.split("?")[0]; // strip query params for cleaner URL
+            return src.split("?")[0];
         };
 
-        const entries = [];
+        const extractFromDoc = (targetDoc, targetUrl, entries, seenHrefs) => {
+            const contentSelectors = [
+                ".book_content",
+                ".no-overflow",
+                ".generalbox",
+                "#page-content",
+                ".box.py-3",
+                "main",
+            ];
+            let contentArea = null;
+            for (const sel of contentSelectors) {
+                contentArea = targetDoc.querySelector(sel);
+                if (contentArea) break;
+            }
+            if (!contentArea) contentArea = targetDoc.body;
+
+            // 一般 <a> 超連結
+            Array.from(contentArea.querySelectorAll("a")).forEach((a) => {
+                const text = getText(a).trim();
+                const href = resolveUrl(a.getAttribute("href") || "", targetUrl);
+                if (!href.startsWith("http")) return;
+                if (href.includes("/mod/book") || href.includes("javascript:")) return;
+                if (text.length < 2) return;
+                if (seenHrefs.has(href)) return;
+                seenHrefs.add(href);
+                const icon = isVideoUrl(href) ? "🎥" : "📄";
+                entries.push(`- ${icon} [${text}](${href})`);
+            });
+
+            // <iframe> 嵌入影片
+            Array.from(contentArea.querySelectorAll("iframe")).forEach((iframe) => {
+                const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
+                const fullSrc = resolveUrl(src, targetUrl);
+                if (!fullSrc.startsWith("http")) return;
+                if (!isVideoEmbed(fullSrc)) return;
+                if (seenHrefs.has(fullSrc)) return;
+                seenHrefs.add(fullSrc);
+                const watchUrl = normalizeVideoUrl(fullSrc);
+                const titleAttr = iframe.getAttribute("title") || iframe.getAttribute("name") || "";
+                const label = titleAttr.trim() || "Embedded Video";
+                entries.push(`- 🎥 [${label}](${watchUrl})`);
+            });
+
+            // <video> 或 <source>
+            Array.from(contentArea.querySelectorAll("video, video source")).forEach((el) => {
+                const src = el.getAttribute("src") || "";
+                const fullSrc = resolveUrl(src, targetUrl);
+                if (!fullSrc.startsWith("http") || seenHrefs.has(fullSrc)) return;
+                seenHrefs.add(fullSrc);
+                const label = el.closest("[title]")?.getAttribute("title") || "Video";
+                entries.push(`- 🎥 [${label}](${fullSrc})`);
+            });
+            
+            return getText(contentArea).substring(0, 800);
+        };
+
         const seenHrefs = new Set();
+        const entries = [];
+        let fallbackText = "";
 
-        // 3a. 一般 <a> 超連結
-        Array.from(contentArea.querySelectorAll("a")).forEach((a) => {
-            const text = getText(a).trim();
-            const href = resolveUrl(a.getAttribute("href") || "", finalUrl);
-            if (!href.startsWith("http")) return;
-            if (href.includes("/mod/book") || href.includes("javascript:")) return;
-            if (text.length < 2) return;
-            if (seenHrefs.has(href)) return;
-            seenHrefs.add(href);
-            const icon = isVideoUrl(href) ? "🎥" : "📄";
-            entries.push(`- ${icon} [${text}](${href})`);
-        });
+        // 尋找傳統的 "Reading Assignment" 章節
+        const readingLink = tocLinks.find((a) => /Reading\s*Assignment/i.test(getText(a)));
 
-        // 3b. <iframe> 嵌入影片（YouTube、Kaltura、Vimeo 等）
-        Array.from(contentArea.querySelectorAll("iframe")).forEach((iframe) => {
-            const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
-            const fullSrc = resolveUrl(src, finalUrl);
-            if (!fullSrc.startsWith("http")) return;
-            if (!isVideoEmbed(fullSrc)) return;
-            if (seenHrefs.has(fullSrc)) return;
-            seenHrefs.add(fullSrc);
-            const watchUrl = normalizeVideoUrl(fullSrc);
-            const titleAttr = iframe.getAttribute("title") || iframe.getAttribute("name") || "";
-            const label = titleAttr.trim() || "Embedded Video";
-            entries.push(`- 🎥 [${label}](${watchUrl})`);
-        });
+        if (readingLink) {
+            const rawHref = readingLink.getAttribute("href") || "";
+            const chapterUrl = resolveUrl(rawHref, bookUrl);
+            console.log("📖 找到 Reading Assignment 章節:", chapterUrl);
+            const res2 = await fetch(chapterUrl, { credentials: "include" });
+            if (res2.ok) {
+                const html2 = await res2.text();
+                const finalDoc = new DOMParser().parseFromString(html2, "text/html");
+                fallbackText = extractFromDoc(finalDoc, chapterUrl, entries, seenHrefs);
+            }
+        } else {
+            console.log("⚠️ TOC 中未找到單一的 Reading Assignment，掃描所有不屬於作業的章節...");
+            
+            // 被排除的關鍵字 (例如: Overview, Assignment, Discussion, Quiz, Journal, Checklist)
+            const excludePattern = /^(overview|discussion\s+assignment|written\s+assignment|learning\s+journal|self-quiz|checklist|portfolio\s+activity|review\s+quiz|tasks?|class\s+introductions?)$/i;
 
-        // 3c. <video> 或 <source> 直連影片檔
-        Array.from(contentArea.querySelectorAll("video, video source")).forEach((el) => {
-            const src = el.getAttribute("src") || "";
-            const fullSrc = resolveUrl(src, finalUrl);
-            if (!fullSrc.startsWith("http") || seenHrefs.has(fullSrc)) return;
-            seenHrefs.add(fullSrc);
-            const label = el.closest("[title]")?.getAttribute("title") || "Video";
-            entries.push(`- 🎥 [${label}](${fullSrc})`);
-        });
+            const allChapters = Array.from(doc.querySelectorAll(".book_toc a, .chapter a, .list-group-item a"));
+            const uniqueChapters = [];
+            const seenChapUrls = new Set();
+            
+            for (const ch of allChapters) {
+                const rawHref = ch.getAttribute("href") || "";
+                if (!rawHref) continue;
+                const url = resolveUrl(rawHref, bookUrl);
+                if (seenChapUrls.has(url)) continue;
+                seenChapUrls.add(url);
+                uniqueChapters.push({ el: ch, url });
+            }
+
+            for (const ch of uniqueChapters) {
+                const text = getText(ch.el).replace(/^\d+(\.\d+)*\s*/, "").trim(); // 移除章節編號 (如 1.2)
+                if (excludePattern.test(text)) {
+                    console.log(`⏩ 跳過非閱讀章節: ${text}`);
+                    continue;
+                }
+                
+                try {
+                    const r = await fetch(ch.url, { credentials: "include" });
+                    if (!r.ok) continue;
+                    const h = await r.text();
+                    const d = new DOMParser().parseFromString(h, "text/html");
+                    const txt = extractFromDoc(d, ch.url, entries, seenHrefs);
+                    if (!fallbackText) fallbackText = txt; // 只保留第一個有內容的作為 fallback text
+                } catch (e) {
+                    console.warn(`Fetch error for chapter ${text}:`, e);
+                }
+            }
+        }
 
         if (entries.length > 0) {
             return `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
         }
 
-        // ── Step 4：無連結時，抓取純文字內容 ──
-        const textContent = getText(contentArea).substring(0, 800);
-        if (textContent.length > 20) {
-            return `#### 📖 Reading Assignment Text\n> ${textContent.replace(
-                /\n/g,
-                "\n> "
-            )}`;
+        if (fallbackText && fallbackText.length > 20) {
+            return `#### 📖 Reading Assignment Text\n> ${fallbackText.replace(/\n/g, "\n> ")}`;
         }
 
         return "⚠️ 找到了頁面但內容為空，可能需要登入後才能存取。";

@@ -15,7 +15,7 @@
  *    using the user's active login session, then appends the filenames to Obsidian.
  */
 
-const OBSIDIAN_HOST = "127.0.0.1:27124";
+let OBSIDIAN_HOST = "127.0.0.1:27124";
 
 // ─── Global State ─────────────────────────────────
 let scannedResults = [];   // all scanned tasks
@@ -28,19 +28,25 @@ let obsidianProtocol = "";  // auto-detected: "https" or "http"
 
 // ─── Auto-detect Obsidian protocol ────────────────
 async function detectObsidianProtocol(apiKey) {
-    for (const proto of ["https", "http"]) {
+    const endpoints = [
+        { proto: "https", host: "127.0.0.1:27124" },
+        { proto: "http", host: "127.0.0.1:27123" }
+    ];
+
+    for (const endpoint of endpoints) {
         try {
-            const res = await fetch(`${proto}://${OBSIDIAN_HOST}/`, {
+            const res = await fetch(`${endpoint.proto}://${endpoint.host}/`, {
                 headers: { Authorization: `Bearer ${apiKey}` },
                 signal: AbortSignal.timeout(3000),
             });
             if (res.ok || res.status === 401 || res.status === 403) {
-                console.log(`✅ Obsidian detected on ${proto}`);
-                obsidianProtocol = proto;
-                return proto;
+                console.log(`✅ Obsidian detected on ${endpoint.proto}://${endpoint.host}`);
+                obsidianProtocol = endpoint.proto;
+                OBSIDIAN_HOST = endpoint.host;
+                return endpoint.proto;
             }
         } catch (e) {
-            console.log(`❌ ${proto} failed:`, e.message);
+            console.log(`❌ ${endpoint.proto} failed:`, e.message);
         }
     }
     return "";
