@@ -24,6 +24,31 @@ let uopUrls = [];   // my.uopeople.edu links   (for download)
 let unitDetails = {};   // { unitName: { topics:[], outcomes:[] } }
 let courseName = "";
 let obsidianApiKey = "";
+let obsidianProtocol = "";  // auto-detected: "https" or "http"
+
+// ─── Auto-detect Obsidian protocol ────────────────
+async function detectObsidianProtocol(apiKey) {
+    for (const proto of ["https", "http"]) {
+        try {
+            const res = await fetch(`${proto}://${OBSIDIAN_HOST}/`, {
+                headers: { Authorization: `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(3000),
+            });
+            if (res.ok || res.status === 401 || res.status === 403) {
+                console.log(`✅ Obsidian detected on ${proto}`);
+                obsidianProtocol = proto;
+                return proto;
+            }
+        } catch (e) {
+            console.log(`❌ ${proto} failed:`, e.message);
+        }
+    }
+    return "";
+}
+
+function getObsidianBaseUrl() {
+    return `${obsidianProtocol || "https"}://${OBSIDIAN_HOST}`;
+}
 
 // ─── DOM refs ────────────────────────────────────
 let statusEl, actionStatusEl, progressWrap, progressBar,
@@ -89,11 +114,20 @@ function enableActionBtns() {
 // ─────────────────────────────────────────────────
 // Save API Key
 // ─────────────────────────────────────────────────
-function handleSaveKey() {
+async function handleSaveKey() {
     obsidianApiKey = apiKeyInput.value.trim();
-    chrome.storage.local.set({ obsidian_key: obsidianApiKey }, () => {
-        setStatus("✅ API Key saved.");
-    });
+    chrome.storage.local.set({ obsidian_key: obsidianApiKey });
+
+    setStatus("🔍 API Key saved. Testing connection...");
+    const proto = await detectObsidianProtocol(obsidianApiKey);
+    if (proto) {
+        setStatus(`✅ API Key saved. Connected via ${proto.toUpperCase()}.`);
+    } else {
+        setStatus(
+            `❌ API Key saved, but cannot connect to Obsidian.\n` +
+            `Make sure the Local REST API plugin is running in Obsidian.`
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────
@@ -105,8 +139,21 @@ async function handleScan() {
         return;
     }
 
+    // Auto-detect protocol if not yet detected
+    if (!obsidianProtocol) {
+        setStatus("🔍 Detecting Obsidian connection...");
+        const proto = await detectObsidianProtocol(obsidianApiKey);
+        if (!proto) {
+            setStatus(
+                `❌ Cannot connect to Obsidian at ${OBSIDIAN_HOST}.\n` +
+                `Make sure the Local REST API plugin is enabled and Obsidian is running.`
+            );
+            return;
+        }
+    }
+
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    setStatus("🔍 Checking connection...");
+    setStatus("🔍 Checking content script...");
 
     chrome.tabs.sendMessage(tab.id, { action: "ping" }, (res) => {
         if (chrome.runtime.lastError || !res) {
@@ -137,17 +184,21 @@ async function handleScan() {
             uopUrls = internal;
 
             setStatus("📤 Syncing to Obsidian...");
-            await uploadToObsidian(courseName, scannedResults, unitDetails, obsidianApiKey);
+            const uploadOk = await uploadToObsidian(courseName, scannedResults, unitDetails, obsidianApiKey);
             setProgress(100);
 
             showStats();
             enableActionBtns();
-            setStatus(
-                `✅ Sync complete!\n` +
-                `${scannedResults.length} tasks · ${externalUrls.length} external links · ` +
-                `${uopUrls.length} UoPeople files.\n` +
-                `Note includes links, summary table, and NotebookLM prompt.`
-            );
+
+            if (uploadOk) {
+                setStatus(
+                    `✅ Sync complete!\n` +
+                    `${scannedResults.length} tasks · ${externalUrls.length} external links · ` +
+                    `${uopUrls.length} UoPeople files.\n` +
+                    `Note includes links, summary table, and NotebookLM prompt.`
+                );
+            }
+            // If uploadOk is false, uploadToObsidian already set the error status.
         });
     });
 }
@@ -278,7 +329,7 @@ async function handleDownload() {
 // Append downloaded file list to the existing Obsidian note
 async function appendDownloadedFilesToNote(course, filenames, apiKey) {
     const safeName = course.replace(/[/\\?%*:|"<>]/g, "-").trim();
-    const path = `http://${OBSIDIAN_HOST}/vault/UoPeople/${safeName}_Summary.md`;
+    const path = `${getObsidianBaseUrl()}/vault/UoPeople/${safeName}_Summary.md`;
 
     try {
         // Read existing content
@@ -546,20 +597,36 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     });
 
     try {
-        const res = await fetch(
-            `http://${OBSIDIAN_HOST}/vault/UoPeople/${safeName}_Summary.md`,
-            {
-                method: "PUT",
-                headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    "Content-Type": "text/markdown",
-                },
-                body: md,
-            }
+        const url = `${getObsidianBaseUrl()}/vault/UoPeople/${encodeURIComponent(safeName)}_Summary.md`;
+        console.log(`📤 Uploading to Obsidian: ${url}`);
+        const res = await fetch(url, {
+            method: "PUT",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "text/markdown",
+            },
+            body: md,
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            setStatus(
+                `❌ Obsidian push failed (HTTP ${res.status}).\n` +
+                `URL: ${url}\n` +
+                `Response: ${body.substring(0, 100) || "(empty)"}\n` +
+                `Check your API Key and that the vault folder "UoPeople" exists.`
+            );
+            return false;
+        }
+        console.log("✅ Note uploaded successfully.");
+        return true;
+    } catch (err) {
+        setStatus(
+            `❌ Cannot connect to Obsidian.\n` +
+            `Protocol: ${obsidianProtocol || "unknown"}\n` +
+            `Error: ${err.message}\n` +
+            `Make sure the Local REST API plugin is running.`
         );
-        if (!res.ok) setStatus(`❌ Obsidian push failed (HTTP ${res.status}). Check your API Key.`);
-    } catch {
-        setStatus("❌ Cannot connect to Obsidian. Make sure the Local REST API plugin is running.");
+        return false;
     }
 }
 
