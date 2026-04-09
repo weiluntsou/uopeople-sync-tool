@@ -278,7 +278,7 @@ async function handleDownload() {
 // Append downloaded file list to the existing Obsidian note
 async function appendDownloadedFilesToNote(course, filenames, apiKey) {
     const safeName = course.replace(/[/\\?%*:|"<>]/g, "-").trim();
-    const path = `https://${OBSIDIAN_HOST}/vault/UoPeople/${safeName}_Summary.md`;
+    const path = `http://${OBSIDIAN_HOST}/vault/UoPeople/${safeName}_Summary.md`;
 
     try {
         // Read existing content
@@ -547,7 +547,7 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
 
     try {
         const res = await fetch(
-            `https://${OBSIDIAN_HOST}/vault/UoPeople/${safeName}_Summary.md`,
+            `http://${OBSIDIAN_HOST}/vault/UoPeople/${safeName}_Summary.md`,
             {
                 method: "PUT",
                 headers: {
