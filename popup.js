@@ -174,8 +174,16 @@ async function handleScan() {
         chrome.tabs.sendMessage(tab.id, { action: "scanPage" }, async (response) => {
             scanBtn.disabled = false;
 
-            if (!response || response.action !== "final") {
+            if (!response) {
                 setStatus("❌ Scan timed out. Make sure the course page is fully loaded.");
+                return;
+            }
+            if (response.action === "error") {
+                setStatus(`❌ Scan failed: ${response.message}`);
+                return;
+            }
+            if (response.action !== "final") {
+                setStatus("❌ Unexpected scan response. Please try again.");
                 return;
             }
 
@@ -235,9 +243,10 @@ function categorizeUrls(results) {
         }
 
         // Reading module URL itself → internal only if it's a downloadable file
-        if (item.type === "Reading" && isUoPeopleFile(item.url)) {
-            internal.add(item.url);
-            nameMap[item.url] = item.title;
+        const readingFileUrl = item.downloadUrl || item.url;
+        if (item.type === "Reading" && isUoPeopleFile(readingFileUrl)) {
+            internal.add(readingFileUrl);
+            nameMap[readingFileUrl] = item.title;
         }
     }
 

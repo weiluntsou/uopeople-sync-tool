@@ -157,6 +157,78 @@ function isReadingAssignmentPage(title, url) {
     return isBookModule || isD2LContent || isReadingTitle;
 }
 
+// 判斷連結是否為影片平台
+const isVideoUrl = (url) =>
+    /youtube\.com|youtu\.be|kaltura|kaf\.|vimeo\.com|loom\.com|wistia\.com|brightcove|mediasite|panopto|ted\.com\/talks/i.test(url);
+
+// 判斷 iframe src 是否為影片嵌入
+const isVideoEmbed = (src) =>
+    /youtube\.com\/embed|youtu\.be|player\.vimeo|kaltura|kaf\.|panopto|loom\.com\/embed|brightcove/i.test(src);
+
+const normalizeVideoUrl = (src) => {
+    const ytEmbed = src.match(/youtube\.com\/embed\/([A-Za-z0-9_-]+)/);
+    if (ytEmbed) return `https://www.youtube.com/watch?v=${ytEmbed[1]}`;
+    const kaftEmbed = src.match(/youtu\.be\/([A-Za-z0-9_-]+)/);
+    if (kaftEmbed) return `https://www.youtube.com/watch?v=${kaftEmbed[1]}`;
+    return src.split("?")[0];
+};
+
+const extractFromDoc = (targetDoc, targetUrl, entries, seenHrefs) => {
+    const contentSelectors = [
+        ".book_content",
+        ".no-overflow",
+        ".generalbox",
+        "#page-content",
+        ".box.py-3",
+        "main",
+    ];
+    let contentArea = null;
+    for (const sel of contentSelectors) {
+        contentArea = targetDoc.querySelector(sel);
+        if (contentArea) break;
+    }
+    if (!contentArea) contentArea = targetDoc.body;
+
+    // 一般 <a> 超連結
+    Array.from(contentArea.querySelectorAll("a")).forEach((a) => {
+        const text = getText(a).trim();
+        const href = resolveUrl(a.getAttribute("href") || "", targetUrl);
+        if (!href.startsWith("http")) return;
+        if (href.includes("/mod/book") || href.includes("javascript:")) return;
+        if (text.length < 2) return;
+        if (seenHrefs.has(href)) return;
+        seenHrefs.add(href);
+        const icon = isVideoUrl(href) ? "🎥" : "📄";
+        entries.push(`- ${icon} [${text}](${href})`);
+    });
+
+    // <iframe> 嵌入影片
+    Array.from(contentArea.querySelectorAll("iframe")).forEach((iframe) => {
+        const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
+        const fullSrc = resolveUrl(src, targetUrl);
+        if (!fullSrc.startsWith("http")) return;
+        if (!isVideoEmbed(fullSrc)) return;
+        if (seenHrefs.has(fullSrc)) return;
+        seenHrefs.add(fullSrc);
+        const watchUrl = normalizeVideoUrl(fullSrc);
+        const titleAttr = iframe.getAttribute("title") || iframe.getAttribute("name") || "";
+        const label = titleAttr.trim() || "Embedded Video";
+        entries.push(`- 🎥 [${label}](${watchUrl})`);
+    });
+
+    // <video> 或 <source>
+    Array.from(contentArea.querySelectorAll("video, video source")).forEach((el) => {
+        const src = el.getAttribute("src") || "";
+        const fullSrc = resolveUrl(src, targetUrl);
+        if (!fullSrc.startsWith("http") || seenHrefs.has(fullSrc)) return;
+        seenHrefs.add(fullSrc);
+        const label = el.closest("[title]")?.getAttribute("title") || "Video";
+        entries.push(`- 🎥 [${label}](${fullSrc})`);
+    });
+    
+    return getText(contentArea).substring(0, 800);
+};
+
 // ─────────────────────────────────────────────
 // 抓取 Book/Reading Assignment 頁面內容
 // ─────────────────────────────────────────────
@@ -177,78 +249,6 @@ async function fetchReadingPage(bookUrl) {
         const tocLinks = Array.from(
             doc.querySelectorAll(tocSelectors.join(", "))
         );
-
-        // 判斷連結是否為影片平台
-        const isVideoUrl = (url) =>
-            /youtube\.com|youtu\.be|kaltura|kaf\.|vimeo\.com|loom\.com|wistia\.com|brightcove|mediasite|panopto|ted\.com\/talks/i.test(url);
-
-        // 判斷 iframe src 是否為影片嵌入
-        const isVideoEmbed = (src) =>
-            /youtube\.com\/embed|youtu\.be|player\.vimeo|kaltura|kaf\.|panopto|loom\.com\/embed|brightcove/i.test(src);
-
-        const normalizeVideoUrl = (src) => {
-            const ytEmbed = src.match(/youtube\.com\/embed\/([A-Za-z0-9_-]+)/);
-            if (ytEmbed) return `https://www.youtube.com/watch?v=${ytEmbed[1]}`;
-            const kaftEmbed = src.match(/youtu\.be\/([A-Za-z0-9_-]+)/);
-            if (kaftEmbed) return `https://www.youtube.com/watch?v=${kaftEmbed[1]}`;
-            return src.split("?")[0];
-        };
-
-        const extractFromDoc = (targetDoc, targetUrl, entries, seenHrefs) => {
-            const contentSelectors = [
-                ".book_content",
-                ".no-overflow",
-                ".generalbox",
-                "#page-content",
-                ".box.py-3",
-                "main",
-            ];
-            let contentArea = null;
-            for (const sel of contentSelectors) {
-                contentArea = targetDoc.querySelector(sel);
-                if (contentArea) break;
-            }
-            if (!contentArea) contentArea = targetDoc.body;
-
-            // 一般 <a> 超連結
-            Array.from(contentArea.querySelectorAll("a")).forEach((a) => {
-                const text = getText(a).trim();
-                const href = resolveUrl(a.getAttribute("href") || "", targetUrl);
-                if (!href.startsWith("http")) return;
-                if (href.includes("/mod/book") || href.includes("javascript:")) return;
-                if (text.length < 2) return;
-                if (seenHrefs.has(href)) return;
-                seenHrefs.add(href);
-                const icon = isVideoUrl(href) ? "🎥" : "📄";
-                entries.push(`- ${icon} [${text}](${href})`);
-            });
-
-            // <iframe> 嵌入影片
-            Array.from(contentArea.querySelectorAll("iframe")).forEach((iframe) => {
-                const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
-                const fullSrc = resolveUrl(src, targetUrl);
-                if (!fullSrc.startsWith("http")) return;
-                if (!isVideoEmbed(fullSrc)) return;
-                if (seenHrefs.has(fullSrc)) return;
-                seenHrefs.add(fullSrc);
-                const watchUrl = normalizeVideoUrl(fullSrc);
-                const titleAttr = iframe.getAttribute("title") || iframe.getAttribute("name") || "";
-                const label = titleAttr.trim() || "Embedded Video";
-                entries.push(`- 🎥 [${label}](${watchUrl})`);
-            });
-
-            // <video> 或 <source>
-            Array.from(contentArea.querySelectorAll("video, video source")).forEach((el) => {
-                const src = el.getAttribute("src") || "";
-                const fullSrc = resolveUrl(src, targetUrl);
-                if (!fullSrc.startsWith("http") || seenHrefs.has(fullSrc)) return;
-                seenHrefs.add(fullSrc);
-                const label = el.closest("[title]")?.getAttribute("title") || "Video";
-                entries.push(`- 🎥 [${label}](${fullSrc})`);
-            });
-            
-            return getText(contentArea).substring(0, 800);
-        };
 
         const seenHrefs = new Set();
         const entries = [];
@@ -648,8 +648,19 @@ async function scanD2LPage(sendResponse) {
     console.log("🏁 Starting D2L REST API Scraper...");
     
     const url = window.location.href;
-    const match = url.match(/\/d2l\/(?:home|le\/lessons|le\/content)\/(\d+)/i);
-    const orgUnitId = match ? match[1] : null;
+    let orgUnitId = null;
+    const pathMatch = url.match(/\/d2l\/(?:home|le\/lessons|le\/content|le\/sequence)\/(\d+)/i);
+    if (pathMatch) {
+        orgUnitId = pathMatch[1];
+    } else {
+        try {
+            const urlObj = new URL(url);
+            orgUnitId = urlObj.searchParams.get("ou");
+        } catch (e) {
+            console.warn("Failed to parse URL object:", e);
+        }
+    }
+
     if (!orgUnitId) {
         console.error("❌ Could not extract orgUnitId from URL:", url);
         sendResponse({
@@ -702,62 +713,92 @@ async function scanD2LPage(sendResponse) {
     }
 
     const tasks = [];
+    const seenTaskIds = new Set();
     
-    function traverse(nodes, parentModuleName = "General") {
-        for (const node of nodes) {
-            if (node.Type === 0) { // Module
-                const title = node.Title.trim();
-                let unitName = parentModuleName === "General" ? title : parentModuleName;
-                if (node.Structure && node.Structure.length > 0) {
-                    traverse(node.Structure, unitName);
-                }
-            } else if (node.Type === 1) { // Topic
-                let rawType = "Reading";
-                if (node.ActivityType === 3) {
-                    rawType = "Assignment";
-                } else if (node.ActivityType === 4) {
-                    rawType = "Quiz";
-                } else if (node.ActivityType === 5 || node.ActivityType === 6) {
-                    rawType = "Discussion";
-                } else if (node.ActivityType === 10 || node.ActivityType === 11 || node.ActivityType === 12) {
-                    rawType = "Resource";
-                } else if (!node.ActivityType) {
-                    const titleLower = node.Title.toLowerCase();
-                    if (titleLower.includes("discussion")) {
-                        rawType = "Discussion";
-                    } else if (titleLower.includes("assignment") || titleLower.includes("portfolio")) {
-                        rawType = "Assignment";
-                    } else if (titleLower.includes("quiz") || titleLower.includes("exam")) {
-                        rawType = "Quiz";
-                    } else if (titleLower.includes("reading") || titleLower.includes("learning guide") || titleLower.includes("overview")) {
-                        rawType = "Reading";
-                    } else {
-                        rawType = "Resource";
-                    }
-                }
-                
-                const topicUrl = `https://learn.uopeople.edu/d2l/le/lessons/${orgUnitId}/topics/${node.Id}`;
-                
-                let deadline = "N/A";
-                if (node.DueDate) {
-                    deadline = formatD2LDate(node.DueDate);
-                }
-                
-                let downloadUrl = null;
-                if (node.Url) {
-                    downloadUrl = resolveUrl(node.Url, `https://learn.uopeople.edu`);
-                }
-                
-                tasks.push({
-                    id: node.Id,
-                    title: node.Title.trim(),
-                    url: topicUrl,
-                    downloadUrl: downloadUrl,
-                    unitId: parentModuleName,
-                    deadline: deadline,
-                    rawType: rawType
-                });
+    function traverse(node, parentModuleName = "General") {
+        if (!node) return;
+        
+        if (Array.isArray(node)) {
+            for (const item of node) {
+                traverse(item, parentModuleName);
             }
+            return;
+        }
+        
+        const isModule = node.Type === 0 || 
+                         (node.Modules !== undefined) || 
+                         (node.Topics !== undefined) || 
+                         (node.ModuleId !== undefined);
+                         
+        if (isModule) {
+            const title = (node.Title || "").trim();
+            let unitName = parentModuleName;
+            if (title) {
+                if (parentModuleName === "General") {
+                    unitName = title;
+                }
+            }
+            
+            if (Array.isArray(node.Modules)) {
+                traverse(node.Modules, unitName);
+            }
+            if (Array.isArray(node.Topics)) {
+                traverse(node.Topics, unitName);
+            }
+            if (Array.isArray(node.Structure)) {
+                traverse(node.Structure, unitName);
+            }
+        } else {
+            const topicId = node.TopicId || node.Id;
+            if (!topicId || seenTaskIds.has(topicId)) return;
+            seenTaskIds.add(topicId);
+            
+            let rawType = "Reading";
+            const actType = node.ActivityType;
+            if (actType === 3) {
+                rawType = "Assignment";
+            } else if (actType === 4) {
+                rawType = "Quiz";
+            } else if (actType === 5 || actType === 6) {
+                rawType = "Discussion";
+            } else if (actType === 10 || actType === 11 || actType === 12) {
+                rawType = "Resource";
+            } else {
+                const titleLower = (node.Title || "").toLowerCase();
+                if (titleLower.includes("discussion")) {
+                    rawType = "Discussion";
+                } else if (titleLower.includes("assignment") || titleLower.includes("portfolio")) {
+                    rawType = "Assignment";
+                } else if (titleLower.includes("quiz") || titleLower.includes("exam")) {
+                    rawType = "Quiz";
+                } else if (titleLower.includes("reading") || titleLower.includes("learning guide") || titleLower.includes("overview")) {
+                    rawType = "Reading";
+                } else {
+                    rawType = "Resource";
+                }
+            }
+            
+            const topicUrl = `https://learn.uopeople.edu/d2l/le/lessons/${orgUnitId}/topics/${topicId}`;
+            
+            let deadline = "N/A";
+            if (node.DueDate) {
+                deadline = formatD2LDate(node.DueDate);
+            }
+            
+            let downloadUrl = null;
+            if (node.Url) {
+                downloadUrl = resolveUrl(node.Url, `https://learn.uopeople.edu`);
+            }
+            
+            tasks.push({
+                id: topicId,
+                title: (node.Title || "").trim(),
+                url: topicUrl,
+                downloadUrl: downloadUrl,
+                unitId: parentModuleName,
+                deadline: deadline,
+                rawType: rawType
+            });
         }
     }
 
@@ -793,6 +834,7 @@ async function scanD2LPage(sendResponse) {
                 results[idx] = {
                     title: task.title,
                     url: task.url,
+                    downloadUrl: task.downloadUrl,
                     unitTime: unitName,
                     detail: extra.detail,
                     deadline: extra.deadline !== "N/A" ? extra.deadline : task.deadline,
@@ -803,6 +845,7 @@ async function scanD2LPage(sendResponse) {
                 results[idx] = {
                     title: task.title,
                     url: task.url,
+                    downloadUrl: task.downloadUrl,
                     unitTime: task.unitId || "General",
                     detail: `❌ Scan failed: ${e.message}`,
                     deadline: task.deadline,
@@ -939,11 +982,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ status: "ready" });
     } else if (msg.action === "scanPage") {
         (async () => {
-            const isD2L = window.location.hostname.includes("learn.uopeople.edu");
-            if (isD2L) {
-                await scanD2LPage(sendResponse);
-            } else {
-                await scanMoodlePage(sendResponse);
+            try {
+                const isD2L = window.location.hostname.includes("learn.uopeople.edu");
+                if (isD2L) {
+                    await scanD2LPage(sendResponse);
+                } else {
+                    await scanMoodlePage(sendResponse);
+                }
+            } catch (e) {
+                console.error("Error during page scan:", e);
+                sendResponse({
+                    action: "error",
+                    message: `Scan failed due to an error: ${e.message}`
+                });
             }
         })();
         return true;
