@@ -146,13 +146,15 @@ function extractListFromOfflineDoc(containerEl, headingPattern) {
 function isReadingAssignmentPage(title, url) {
     const titleLower = title.toLowerCase();
     const isBookModule = url.includes("/mod/book/");
+    const isD2LContent = url.includes("/viewContent/") || url.includes("/lessons/") || url.includes("/content/");
     const isReadingTitle =
         titleLower.includes("reading") ||
         titleLower.includes("learning guide") ||
         titleLower.includes("study guide") ||
         titleLower.includes("textbook") ||
-        titleLower.includes("resource");
-    return isBookModule || isReadingTitle;
+        titleLower.includes("resource") ||
+        titleLower.includes("overview");
+    return isBookModule || isD2LContent || isReadingTitle;
 }
 
 // ─────────────────────────────────────────────
@@ -252,54 +254,59 @@ async function fetchReadingPage(bookUrl) {
         const entries = [];
         let fallbackText = "";
 
-        // 尋找傳統的 "Reading Assignment" 章節
-        const readingLink = tocLinks.find((a) => /Reading\s*Assignment/i.test(getText(a)));
-
-        if (readingLink) {
-            const rawHref = readingLink.getAttribute("href") || "";
-            const chapterUrl = resolveUrl(rawHref, bookUrl);
-            console.log("📖 找到 Reading Assignment 章節:", chapterUrl);
-            const res2 = await fetch(chapterUrl, { credentials: "include" });
-            if (res2.ok) {
-                const html2 = await res2.text();
-                const finalDoc = new DOMParser().parseFromString(html2, "text/html");
-                fallbackText = extractFromDoc(finalDoc, chapterUrl, entries, seenHrefs);
-            }
+        if (tocLinks.length === 0) {
+            console.log("📄 D2L/Single page reading assignment detected. Extracting directly...");
+            fallbackText = extractFromDoc(doc, bookUrl, entries, seenHrefs);
         } else {
-            console.log("⚠️ TOC 中未找到單一的 Reading Assignment，掃描所有不屬於作業的章節...");
-            
-            // 被排除的關鍵字 (例如: Overview, Assignment, Discussion, Quiz, Journal, Checklist)
-            const excludePattern = /^(overview|discussion\s+assignment|written\s+assignment|learning\s+journal|self-quiz|checklist|portfolio\s+activity|review\s+quiz|tasks?|class\s+introductions?)$/i;
+            // 尋找傳統的 "Reading Assignment" 章節
+            const readingLink = tocLinks.find((a) => /Reading\s*Assignment/i.test(getText(a)));
 
-            const allChapters = Array.from(doc.querySelectorAll(".book_toc a, .chapter a, .list-group-item a"));
-            const uniqueChapters = [];
-            const seenChapUrls = new Set();
-            
-            for (const ch of allChapters) {
-                const rawHref = ch.getAttribute("href") || "";
-                if (!rawHref) continue;
-                const url = resolveUrl(rawHref, bookUrl);
-                if (seenChapUrls.has(url)) continue;
-                seenChapUrls.add(url);
-                uniqueChapters.push({ el: ch, url });
-            }
-
-            for (const ch of uniqueChapters) {
-                const text = getText(ch.el).replace(/^\d+(\.\d+)*\s*/, "").trim(); // 移除章節編號 (如 1.2)
-                if (excludePattern.test(text)) {
-                    console.log(`⏩ 跳過非閱讀章節: ${text}`);
-                    continue;
+            if (readingLink) {
+                const rawHref = readingLink.getAttribute("href") || "";
+                const chapterUrl = resolveUrl(rawHref, bookUrl);
+                console.log("📖 找到 Reading Assignment 章節:", chapterUrl);
+                const res2 = await fetch(chapterUrl, { credentials: "include" });
+                if (res2.ok) {
+                    const html2 = await res2.text();
+                    const finalDoc = new DOMParser().parseFromString(html2, "text/html");
+                    fallbackText = extractFromDoc(finalDoc, chapterUrl, entries, seenHrefs);
                 }
+            } else {
+                console.log("⚠️ TOC 中未找到單一的 Reading Assignment，掃描所有不屬於作業的章節...");
                 
-                try {
-                    const r = await fetch(ch.url, { credentials: "include" });
-                    if (!r.ok) continue;
-                    const h = await r.text();
-                    const d = new DOMParser().parseFromString(h, "text/html");
-                    const txt = extractFromDoc(d, ch.url, entries, seenHrefs);
-                    if (!fallbackText) fallbackText = txt; // 只保留第一個有內容的作為 fallback text
-                } catch (e) {
-                    console.warn(`Fetch error for chapter ${text}:`, e);
+                // 被排除的關鍵字 (例如: Overview, Assignment, Discussion, Quiz, Journal, Checklist)
+                const excludePattern = /^(overview|discussion\s+assignment|written\s+assignment|learning\s+journal|self-quiz|checklist|portfolio\s+activity|review\s+quiz|tasks?|class\s+introductions?)$/i;
+
+                const allChapters = Array.from(doc.querySelectorAll(".book_toc a, .chapter a, .list-group-item a"));
+                const uniqueChapters = [];
+                const seenChapUrls = new Set();
+                
+                for (const ch of allChapters) {
+                    const rawHref = ch.getAttribute("href") || "";
+                    if (!rawHref) continue;
+                    const url = resolveUrl(rawHref, bookUrl);
+                    if (seenChapUrls.has(url)) continue;
+                    seenChapUrls.add(url);
+                    uniqueChapters.push({ el: ch, url });
+                }
+
+                for (const ch of uniqueChapters) {
+                    const text = getText(ch.el).replace(/^\d+(\.\d+)*\s*/, "").trim(); // 移除章節編號 (如 1.2)
+                    if (excludePattern.test(text)) {
+                        console.log(`⏩ 跳過非閱讀章節: ${text}`);
+                        continue;
+                    }
+                    
+                    try {
+                        const r = await fetch(ch.url, { credentials: "include" });
+                        if (!r.ok) continue;
+                        const h = await r.text();
+                        const d = new DOMParser().parseFromString(h, "text/html");
+                        const txt = extractFromDoc(d, ch.url, entries, seenHrefs);
+                        if (!fallbackText) fallbackText = txt; // 只保留第一個有內容的作為 fallback text
+                    } catch (e) {
+                        console.warn(`Fetch error for chapter ${text}:`, e);
+                    }
                 }
             }
         }
@@ -445,22 +452,40 @@ async function fetchDeepDetail(url, title) {
         let topics = [];
         let outcomes = [];
 
+        const isD2L = window.location.hostname.includes("learn.uopeople.edu");
+
         // ── 判斷是否為 Reading Assignment / Learning Guide 類型 ──
         if (isReadingAssignmentPage(title, url)) {
             console.log(`📖 識別為 Reading 類型：${title}`);
-            // 並行抓取：Reading 連結清單 + Overview 的 Topics/Outcomes
-            const [readingDetail, overviewMeta] = await Promise.all([
-                fetchReadingPage(url),
-                fetchOverviewMetadata(url),
-            ]);
-            detail = readingDetail;
-            topics = overviewMeta.topics;
-            outcomes = overviewMeta.outcomes;
+            if (isD2L) {
+                const iframe = doc.querySelector('iframe.d2l-iframe, iframe[src*="/content/"], iframe[src*="/d2l/"]');
+                let targetUrl = url;
+                if (iframe) {
+                    const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
+                    targetUrl = resolveUrl(src, url);
+                    console.log(`📖 找到 D2L 閱讀文件 iframe 網址: ${targetUrl}`);
+                }
+                const readingDetail = await fetchReadingPage(targetUrl);
+                const overviewMeta = await fetchOverviewMetadata(targetUrl);
+                detail = readingDetail;
+                topics = overviewMeta.topics;
+                outcomes = overviewMeta.outcomes;
+            } else {
+                // 並行抓取：Reading 連結清單 + Overview 的 Topics/Outcomes
+                const [readingDetail, overviewMeta] = await Promise.all([
+                    fetchReadingPage(url),
+                    fetchOverviewMetadata(url),
+                ]);
+                detail = readingDetail;
+                topics = overviewMeta.topics;
+                outcomes = overviewMeta.outcomes;
+            }
         } else {
             // 一般任務（Discussion、Assignment 等）
             const bodySelectors = [
                 ".post-content", "#intro", ".no-overflow",
                 ".generalbox", ".page-content", ".box.py-3",
+                ".d2l-htmlblock", ".d2l-htmlblock-untrusted", "#discussion-description",
             ];
             let bodyEl = null;
             for (const sel of bodySelectors) {
@@ -479,62 +504,253 @@ async function fetchDeepDetail(url, title) {
 }
 
 // ─────────────────────────────────────────────
-// Extract list items that appear after a heading matching a pattern
-// Works on live DOM elements (innerText is available here)
+// Helper: walk DOM recursively including Shadow DOMs
 // ─────────────────────────────────────────────
-function extractListAfterHeading(containerEl, headingPattern) {
-    if (!containerEl) return [];
-    const items = [];
-    let capturing = false;
+function* walkDomWithShadow(root = document.body) {
+    if (!root) return;
+    yield root;
+    
+    if (root.shadowRoot) {
+        yield* walkDomWithShadow(root.shadowRoot);
+    }
+    
+    let child = root.firstElementChild;
+    while (child) {
+        yield* walkDomWithShadow(child);
+        child = child.nextElementSibling;
+    }
+}
 
-    // Walk all child nodes in order
-    const walker = document.createTreeWalker(
-        containerEl,
-        NodeFilter.SHOW_ELEMENT,
-        null
-    );
+// ─────────────────────────────────────────────
+// Helper: Find deadline in container, climbing up through shadow boundaries
+// ─────────────────────────────────────────────
+function findDeadlineInContainer(el) {
+    let parent = el;
+    for (let i = 0; i < 4 && parent; i++) {
+        const text = parent.innerText || parent.textContent || "";
+        const match = text.match(/due:\s*([A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}\s*(?:AM|PM))/i) ||
+                      text.match(/due\s+([A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM))/i) ||
+                      text.match(/due:\s*([A-Za-z]{3}\s+\d{1,2},\s+\d{4})/i) ||
+                      text.match(/due\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i) ||
+                      text.match(/due\s+date:\s*([^\n]+)/i);
+        if (match) {
+            return match[1] || match[0];
+        }
+        parent = parent.parentElement || parent.getRootNode()?.host;
+    }
+    return "N/A";
+}
 
-    let node = walker.nextNode();
-    while (node) {
-        const tag = node.tagName.toUpperCase();
-        const text = (node.innerText || node.textContent || "").trim();
+// ─────────────────────────────────────────────
+// Scraper for D2L Brightspace Page
+// ─────────────────────────────────────────────
+async function scanD2LPage(sendResponse) {
+    console.log("🏁 Starting D2L Scraper...");
+    
+    let courseName = document.title;
+    const siteTitleEl = Array.from(walkDomWithShadow(document.body))
+        .find(el => el.tagName?.toLowerCase() === "d2l-navigation-sitetitle" || el.className?.includes("d2l-navigation-sitetitle"));
+    if (siteTitleEl) {
+        const text = (siteTitleEl.innerText || siteTitleEl.textContent || "").trim();
+        if (text) courseName = text;
+    }
+    
+    courseName = courseName
+        .replace(/\s*-\s*University of the People/i, "")
+        .replace(/\s*-\s*learn\.uopeople\.edu/i, "")
+        .replace(/\s*-\s*Course Home/i, "")
+        .trim();
 
-        // Detect heading that matches our pattern
-        if (["H1", "H2", "H3", "H4", "H5", "H6", "STRONG", "B"].includes(tag)) {
-            if (headingPattern.test(text)) {
-                capturing = true;
-                node = walker.nextNode();
+    let currentUnit = "General";
+    const tasks = [];
+    const seenUrls = new Set();
+    
+    const allElements = Array.from(walkDomWithShadow(document.body));
+    for (const el of allElements) {
+        const text = (el.innerText || el.textContent || "").trim();
+        
+        if (text && text.length < 80) {
+            const unitMatch = text.match(/^(Unit|Week|Module)\s*(\d+)[\s:-]*(.*)/i);
+            if (unitMatch) {
+                const unitNum = unitMatch[2];
+                const unitTitle = unitMatch[3] ? unitMatch[3].trim() : "";
+                currentUnit = `Unit ${unitNum}` + (unitTitle ? `: ${unitTitle}` : "");
                 continue;
-            } else if (capturing) {
-                // Hit a different heading → stop
-                break;
             }
         }
-
-        // Also catch plain <p> or <div> acting as heading
-        if (capturing && tag === "LI") {
-            const li = text.replace(/^[•\-\*]\s*/, "").trim();
-            if (li.length > 1) items.push(li);
+        
+        if (el.tagName?.toUpperCase() === "A") {
+            const href = el.getAttribute("href");
+            if (!href) continue;
+            const resolved = resolveUrl(href, window.location.href);
+            if (seenUrls.has(resolved)) continue;
+            
+            const isDiscussion = resolved.includes("/discussions/") || resolved.includes("type=discussion");
+            const isAssignment = resolved.includes("/dropbox/") || resolved.includes("/assign/") || resolved.includes("type=dropbox");
+            const isQuiz = resolved.includes("/quizzes/") || resolved.includes("/quiz/") || resolved.includes("type=quiz");
+            const isReading = resolved.includes("/viewContent/") || resolved.includes("/lessons/") || resolved.includes("/content/") || resolved.includes("/quickLink/");
+            
+            if (isDiscussion || isAssignment || isQuiz || isReading) {
+                let taskTitle = text.replace(/Mark as done|已完成/gi, "").trim();
+                if (taskTitle.length < 3 || /Print|Next|Previous/i.test(taskTitle)) continue;
+                
+                seenUrls.add(resolved);
+                const deadline = findDeadlineInContainer(el);
+                
+                tasks.push({
+                    title: cleanMD(taskTitle),
+                    url: resolved,
+                    unitId: currentUnit,
+                    deadline,
+                    rawType: isDiscussion ? "Discussion" : isAssignment ? "Assignment" : isQuiz ? "Quiz" : "Reading"
+                });
+            }
         }
-
-        node = walker.nextNode();
     }
 
-    // Fallback: if no <li> found, try splitting plain text after the heading keyword
-    if (items.length === 0 && containerEl.innerText) {
-        const fullText = containerEl.innerText;
-        const match = fullText.match(new RegExp(headingPattern.source + "[s]?\\s*[:\\n]([\\s\\S]{0,600})", "i"));
-        if (match) {
-            match[1]
-                .split(/\n/)
-                .map(l => l.replace(/^[•\-\*\d\.\)]\s*/, "").trim())
-                .filter(l => l.length > 3 && !/^(topic|learning|outcome)/i.test(l))
-                .slice(0, 8)
-                .forEach(l => items.push(l));
+    console.log(`🔍 Found ${tasks.length} D2L activities to deep scan.`);
+
+    const results = [];
+    const enrichedUnitDetails = {};
+
+    for (const task of tasks) {
+        console.log(`🔍 D2L Deep Scan: ${task.title}`);
+        const extra = await fetchDeepDetail(task.url, task.title);
+        const unitName = task.unitId || "General";
+
+        if (!enrichedUnitDetails[unitName]) {
+            enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+        }
+
+        if (extra.topics?.length > 0) {
+            enrichedUnitDetails[unitName].topics = extra.topics;
+        }
+        if (extra.outcomes?.length > 0) {
+            enrichedUnitDetails[unitName].outcomes = extra.outcomes;
+        }
+
+        results.push({
+            title: task.title,
+            url: task.url,
+            unitTime: unitName,
+            detail: extra.detail,
+            deadline: extra.deadline !== "N/A" ? extra.deadline : task.deadline,
+            type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
+        });
+    }
+
+    sendResponse({
+        action: "final",
+        courseName: cleanMD(courseName),
+        results,
+        unitDetails: enrichedUnitDetails,
+    });
+}
+
+// ─────────────────────────────────────────────
+// Scraper for Moodle Page (Original Logic)
+// ─────────────────────────────────────────────
+async function scanMoodlePage(sendResponse) {
+    const courseName =
+        document.querySelector("h1")?.innerText.trim() || document.title;
+
+    const unitMap = {};
+    document
+        .querySelectorAll("li.section, section.section")
+        .forEach((sec) => {
+            const nameEl = sec.querySelector(
+                ".sectionname, h3, .courseindex-link"
+            );
+            const txt = nameEl?.innerText.trim();
+            if (!sec.id || !txt) return;
+
+            const summaryEl = sec.querySelector(
+                ".summarytext, .summary, div.summary, " +
+                ".course-section-summary, .no-overflow, .sectionbody"
+            );
+
+            const topics = extractListAfterHeading(summaryEl, /topics?/i);
+            const outcomes = extractListAfterHeading(summaryEl, /learning\s+outcomes?/i);
+
+            unitMap[sec.id] = {
+                name: cleanMD(txt.split("\n")[0]),
+                topics,
+                outcomes,
+            };
+        });
+
+    const links = Array.from(
+        document.querySelectorAll(
+            ".activityinstance a, .activity-item a, .aalink"
+        )
+    );
+    const tasks = [];
+    const seen = new Set();
+
+    links.forEach((l) => {
+        if (l.href.includes("/mod/") && !seen.has(l.href)) {
+            const t = l.innerText
+                .replace(/Mark as done|已完成/g, "")
+                .trim();
+            if (t.length < 3 || /Print|Next|Previous/i.test(t)) return;
+            seen.add(l.href);
+            const sec = l.closest("li.section, section.section");
+            tasks.push({
+                title: cleanMD(t),
+                url: l.href,
+                unitId: sec?.id,
+            });
+        }
+    });
+
+    const results = [];
+    const enrichedUnitDetails = {};
+    for (const [, data] of Object.entries(unitMap)) {
+        if (typeof data === "object" && data.name) {
+            enrichedUnitDetails[data.name] = {
+                topics: data.topics || [],
+                outcomes: data.outcomes || [],
+            };
         }
     }
 
-    return items;
+    for (const task of tasks) {
+        console.log(`🔍 Moodle Deep Scan: ${task.title}`);
+        const extra = await fetchDeepDetail(task.url, task.title);
+        const unitData = unitMap[task.unitId] || { name: "General", topics: [], outcomes: [] };
+        const unitName = typeof unitData === "string" ? unitData : unitData.name;
+
+        if (extra.topics?.length > 0 || extra.outcomes?.length > 0) {
+            if (!enrichedUnitDetails[unitName]) {
+                enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+            }
+            if (extra.topics.length > 0)
+                enrichedUnitDetails[unitName].topics = extra.topics;
+            if (extra.outcomes.length > 0)
+                enrichedUnitDetails[unitName].outcomes = extra.outcomes;
+        }
+
+        results.push({
+            ...task,
+            detail: extra.detail,
+            deadline: extra.deadline,
+            unitTime: unitName,
+            type: task.url.includes("forum")
+                ? "Discussion"
+                : task.url.includes("assign")
+                    ? "Assignment"
+                    : task.url.includes("book")
+                        ? "Reading"
+                        : "Resource",
+        });
+    }
+
+    sendResponse({
+        action: "final",
+        courseName: cleanMD(courseName),
+        results,
+        unitDetails: enrichedUnitDetails,
+    });
 }
 
 // ─────────────────────────────────────────────
@@ -545,115 +761,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ status: "ready" });
     } else if (msg.action === "scanPage") {
         (async () => {
-            // ── 取得課程名稱 ──
-            const courseName =
-                document.querySelector("h1")?.innerText.trim() || document.title;
-
-            // ── 建立 Unit ID → 名稱 + Topics + Learning Outcomes 的對應 ──
-            const unitMap = {};
-            document
-                .querySelectorAll("li.section, section.section")
-                .forEach((sec) => {
-                    const nameEl = sec.querySelector(
-                        ".sectionname, h3, .courseindex-link"
-                    );
-                    const txt = nameEl?.innerText.trim();
-                    if (!sec.id || !txt) return;
-
-                    // Look for a summary / description block in the section
-                    const summaryEl = sec.querySelector(
-                        ".summarytext, .summary, div.summary, " +
-                        ".course-section-summary, .no-overflow, .sectionbody"
-                    );
-
-                    const topics = extractListAfterHeading(summaryEl, /topics?/i);
-                    const outcomes = extractListAfterHeading(summaryEl, /learning\s+outcomes?/i);
-
-                    unitMap[sec.id] = {
-                        name: cleanMD(txt.split("\n")[0]),
-                        topics,
-                        outcomes,
-                    };
-                });
-
-            // ── 收集所有課程活動連結 ──
-            const links = Array.from(
-                document.querySelectorAll(
-                    ".activityinstance a, .activity-item a, .aalink"
-                )
-            );
-            const tasks = [];
-            const seen = new Set();
-
-            links.forEach((l) => {
-                if (l.href.includes("/mod/") && !seen.has(l.href)) {
-                    const t = l.innerText
-                        .replace(/Mark as done|已完成/g, "")
-                        .trim();
-                    if (t.length < 3 || /Print|Next|Previous/i.test(t)) return;
-                    seen.add(l.href);
-                    const sec = l.closest("li.section, section.section");
-                    tasks.push({
-                        title: cleanMD(t),
-                        url: l.href,
-                        unitId: sec?.id,
-                    });
-                }
-            });
-
-            // ── 深度抓取每個任務，同時收集 Learning Guide 的 Topics/Outcomes ──
-            const results = [];
-            // 先複製主頁面 section summary 抓到的 unitDetails
-            const enrichedUnitDetails = {};
-            for (const [, data] of Object.entries(unitMap)) {
-                if (typeof data === "object" && data.name) {
-                    enrichedUnitDetails[data.name] = {
-                        topics: data.topics || [],
-                        outcomes: data.outcomes || [],
-                    };
-                }
+            const isD2L = window.location.hostname.includes("learn.uopeople.edu");
+            if (isD2L) {
+                await scanD2LPage(sendResponse);
+            } else {
+                await scanMoodlePage(sendResponse);
             }
-
-            for (const task of tasks) {
-                console.log(`🔍 抓取：${task.title}`);
-                const extra = await fetchDeepDetail(task.url, task.title);
-                const unitData = unitMap[task.unitId] || { name: "General", topics: [], outcomes: [] };
-                const unitName = typeof unitData === "string" ? unitData : unitData.name;
-
-                // 如果 Learning Guide 的 Overview 回傳了 Topics/Outcomes，
-                // 用它來補強（或覆蓋）該週的 unitDetails
-                if (extra.topics?.length > 0 || extra.outcomes?.length > 0) {
-                    if (!enrichedUnitDetails[unitName]) {
-                        enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
-                    }
-                    if (extra.topics.length > 0)
-                        enrichedUnitDetails[unitName].topics = extra.topics;
-                    if (extra.outcomes.length > 0)
-                        enrichedUnitDetails[unitName].outcomes = extra.outcomes;
-                }
-
-                results.push({
-                    ...task,
-                    detail: extra.detail,
-                    deadline: extra.deadline,
-                    unitTime: unitName,
-                    type: task.url.includes("forum")
-                        ? "Discussion"
-                        : task.url.includes("assign")
-                            ? "Assignment"
-                            : task.url.includes("book")
-                                ? "Reading"
-                                : "Resource",
-                });
-            }
-
-            sendResponse({
-                action: "final",
-                courseName: cleanMD(courseName),
-                results,
-                unitDetails: enrichedUnitDetails,
-            });
         })();
-        return true; // 保持非同步 channel 開啟
+        return true;
     }
 });

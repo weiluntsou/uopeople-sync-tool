@@ -223,7 +223,7 @@ function categorizeUrls(results) {
                 const url = m[1];
                 if (isUoPeopleFile(url)) {
                     internal.add(url);
-                } else if (!url.includes("my.uopeople.edu")) {
+                } else if (!url.includes("my.uopeople.edu") && !url.includes("learn.uopeople.edu")) {
                     external.add(url);   // includes YouTube, Vimeo, Kaltura, etc.
                 }
             }
@@ -242,9 +242,9 @@ function categorizeUrls(results) {
 // (pluginfile.php = Moodle's file-serving endpoint, or has a file extension)
 // Note: YouTube/Vimeo/Kaltura hosted on external domains are NOT UoPeople files.
 function isUoPeopleFile(url) {
-    if (!url.includes("my.uopeople.edu")) return false;
+    if (!url.includes("my.uopeople.edu") && !url.includes("learn.uopeople.edu")) return false;
     const fileExtensions = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|zip|mp4|mp3|png|jpg|jpeg|gif)(\?|$)/i;
-    return url.includes("pluginfile.php") || fileExtensions.test(url);
+    return url.includes("pluginfile.php") || url.includes("/d2l/") || fileExtensions.test(url);
 }
 
 // ─────────────────────────────────────────────────
