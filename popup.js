@@ -215,14 +215,19 @@ async function handleScan() {
 function categorizeUrls(results) {
     const external = new Set();
     const internal = new Set();
+    const nameMap = {};
 
     for (const item of results) {
         // Parse ALL markdown links from detail text (handles emoji like 🎥 📄 in label)
         if (item.detail) {
-            for (const m of item.detail.matchAll(/\[[\s\S]*?\]\((https?:\/\/[^)]+)\)/g)) {
-                const url = m[1];
+            for (const m of item.detail.matchAll(/\[([\s\S]*?)\]\((https?:\/\/[^)]+)\)/g)) {
+                const label = m[1].replace(/^[🎥📄]\s*/, "").trim();
+                const url = m[2];
                 if (isUoPeopleFile(url)) {
                     internal.add(url);
+                    if (label && label.length < 100 && !label.includes("\n")) {
+                        nameMap[url] = label;
+                    }
                 } else if (!url.includes("my.uopeople.edu") && !url.includes("learn.uopeople.edu")) {
                     external.add(url);   // includes YouTube, Vimeo, Kaltura, etc.
                 }
@@ -232,9 +237,11 @@ function categorizeUrls(results) {
         // Reading module URL itself → internal only if it's a downloadable file
         if (item.type === "Reading" && isUoPeopleFile(item.url)) {
             internal.add(item.url);
+            nameMap[item.url] = item.title;
         }
     }
 
+    window.downloadNames = nameMap;
     return { external: Array.from(external), internal: Array.from(internal) };
 }
 
@@ -244,7 +251,7 @@ function categorizeUrls(results) {
 function isUoPeopleFile(url) {
     if (!url.includes("my.uopeople.edu") && !url.includes("learn.uopeople.edu")) return false;
     const fileExtensions = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|zip|mp4|mp3|png|jpg|jpeg|gif)(\?|$)/i;
-    return url.includes("pluginfile.php") || url.includes("/d2l/") || fileExtensions.test(url);
+    return url.includes("pluginfile.php") || url.includes("/content/enforced/") || url.includes("/content/topics/") || fileExtensions.test(url);
 }
 
 // ─────────────────────────────────────────────────
@@ -282,7 +289,18 @@ async function handleDownload() {
 
     for (let i = 0; i < uopUrls.length; i++) {
         const url = uopUrls[i];
-        const filename = decodeURIComponent(url.split("/").pop().split("?")[0]) || `uop_file_${i + 1}`;
+        let filename = window.downloadNames?.[url] || decodeURIComponent(url.split("/").pop().split("?")[0]) || `uop_file_${i + 1}`;
+        
+        // Sanitize and ensure proper file naming
+        if (filename === "file" || !filename.includes(".")) {
+            if (window.downloadNames?.[url]) {
+                filename = window.downloadNames[url];
+            } else {
+                filename = `uop_file_${i + 1}.html`;
+            }
+        }
+        
+        filename = filename.replace(/[/\\?%*:|"<>]/g, "-").trim();
 
         try {
             // chrome.downloads.download uses the browser's active cookies → works for authenticated content

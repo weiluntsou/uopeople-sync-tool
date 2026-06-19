@@ -326,6 +326,33 @@ async function fetchReadingPage(bookUrl) {
     }
 }
 
+// ─── Post-process helper for extraction ─────────────────────────────
+// 1. Stop when hitting a "Tasks / Checklist" section
+// 2. Split merged LO sentences at ". " boundaries
+// 3. Deduplicate
+const STOP_PATTERNS = /^(tasks?|checklist|activ|note|important|prerequisite|resource)[\s:]*$/i;
+const TASK_ITEM_SUFFIX = /^(read\s+through|complete\s+and|take\s+and|submit\s+the|log\s+on|watch\s+the|post\s+your|respond\s+to)/i;
+const cleanExtracted = (items, splitSentences) => {
+    const result = [];
+    for (const raw of items) {
+        const item = raw.trim();
+        if (!item || item.length < 4) continue;
+        if (STOP_PATTERNS.test(item) || TASK_ITEM_SUFFIX.test(item)) break;
+        if (splitSentences && item.length > 100) {
+            const parts = item.split(/\.\s+(?=[A-Z][a-z])/);
+            if (parts.length > 1) {
+                parts.forEach(p => {
+                    const c = p.replace(/\.\s*$/, "").trim();
+                    if (c.length > 8) result.push(c);
+                });
+                continue;
+            }
+        }
+        result.push(item);
+    }
+    return [...new Set(result)];
+};
+
 // ─────────────────────────────────────────────
 // 從 Learning Guide 的 Overview 章節抓取 Topics + Learning Outcomes
 // ─────────────────────────────────────────────
@@ -341,33 +368,6 @@ async function fetchOverviewMetadata(bookUrl) {
             "#region-main [role='main']",
             "#region-main",
         ];
-
-        // ─── Post-process helper ─────────────────────────────────────
-        // 1. Stop when hitting a "Tasks / Checklist" section
-        // 2. Split merged LO sentences at ". " boundaries
-        // 3. Deduplicate
-        const STOP_PATTERNS = /^(tasks?|checklist|activ|note|important|prerequisite|resource)[\s:]*$/i;
-        const TASK_ITEM_SUFFIX = /^(read\s+through|complete\s+and|take\s+and|submit\s+the|log\s+on|watch\s+the|post\s+your|respond\s+to)/i;
-        const cleanExtracted = (items, splitSentences) => {
-            const result = [];
-            for (const raw of items) {
-                const item = raw.trim();
-                if (!item || item.length < 4) continue;
-                if (STOP_PATTERNS.test(item) || TASK_ITEM_SUFFIX.test(item)) break;
-                if (splitSentences && item.length > 100) {
-                    const parts = item.split(/\.\s+(?=[A-Z][a-z])/);
-                    if (parts.length > 1) {
-                        parts.forEach(p => {
-                            const c = p.replace(/\.\s*$/, "").trim();
-                            if (c.length > 8) result.push(c);
-                        });
-                        continue;
-                    }
-                }
-                result.push(item);
-            }
-            return [...new Set(result)];
-        };
 
         const fetchAndParse = async (url) => {
             const r = await fetch(url, { credentials: "include" });
@@ -542,17 +542,132 @@ function findDeadlineInContainer(el) {
 }
 
 // ─────────────────────────────────────────────
-// Scraper for D2L Brightspace Page
+// Helper: Format D2L API Due Date
+// ─────────────────────────────────────────────
+function formatD2LDate(isoStr) {
+    if (!isoStr) return "N/A";
+    try {
+        const date = new Date(isoStr);
+        const options = { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true };
+        return date.toLocaleString('en-US', options);
+    } catch {
+        return isoStr;
+    }
+}
+
+// ─────────────────────────────────────────────
+// Deep detail fetcher for D2L using Valence APIs
+// ─────────────────────────────────────────────
+async function fetchDeepDetailD2L(orgUnitId, topic, title) {
+    try {
+        const ver = "1.60";
+        const res = await fetch(`/d2l/api/le/${ver}/${orgUnitId}/content/topics/${topic.id}`, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        let deadline = formatD2LDate(data.DueDate);
+        let detail = "";
+        let topics = [];
+        let outcomes = [];
+
+        if (isReadingAssignmentPage(title, topic.url)) {
+            console.log(`📖 Reading topic properties: ${title}`);
+            if (data.TopicType === 1 && data.Url) {
+                const fileUrl = resolveUrl(data.Url, `https://learn.uopeople.edu`);
+                console.log(`📖 Fetching direct HTML content for D2L reading: ${fileUrl}`);
+                try {
+                    const fileRes = await fetch(fileUrl, { credentials: "include" });
+                    if (fileRes.ok) {
+                        const html = await fileRes.text();
+                        const doc = new DOMParser().parseFromString(html, "text/html");
+                        
+                        const seenHrefs = new Set();
+                        const entries = [];
+                        const fallbackText = extractFromDoc(doc, fileUrl, entries, seenHrefs);
+                        
+                        if (entries.length > 0) {
+                            detail = `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
+                        } else if (fallbackText && fallbackText.length > 20) {
+                            detail = `#### 📖 Reading Assignment Text\n> ${fallbackText.replace(/\n/g, "\n> ")}`;
+                        }
+                        
+                        const overviewMeta = {
+                            topics: cleanExtracted(extractListFromOfflineDoc(doc.body, /topics?/i), false),
+                            outcomes: cleanExtracted(extractListFromOfflineDoc(doc.body, /learning\s+outcomes?/i), true)
+                        };
+                        topics = overviewMeta.topics;
+                        outcomes = overviewMeta.outcomes;
+                    }
+                } catch (e) {
+                    console.warn("Failed to fetch direct reading file:", e);
+                }
+            }
+            
+            if (!detail && data.Description?.Html) {
+                const descDoc = new DOMParser().parseFromString(data.Description.Html, "text/html");
+                const seenHrefs = new Set();
+                const entries = [];
+                const fallbackText = extractFromDoc(descDoc, topic.url, entries, seenHrefs);
+                
+                if (entries.length > 0) {
+                    detail = `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
+                } else if (fallbackText && fallbackText.length > 20) {
+                    detail = `#### 📖 Reading Assignment Text\n> ${fallbackText.replace(/\n/g, "\n> ")}`;
+                }
+                
+                const overviewMeta = {
+                    topics: cleanExtracted(extractListFromOfflineDoc(descDoc.body, /topics?/i), false),
+                    outcomes: cleanExtracted(extractListFromOfflineDoc(descDoc.body, /learning\s+outcomes?/i), true)
+                };
+                topics = overviewMeta.topics;
+                outcomes = overviewMeta.outcomes;
+            }
+        } else {
+            let rawText = "";
+            if (data.Description?.Html) {
+                const descDoc = new DOMParser().parseFromString(data.Description.Html, "text/html");
+                rawText = getText(descDoc.body);
+            }
+            if (!rawText) {
+                rawText = data.Description?.Text || "No content";
+            }
+            detail = `> ${rawText.substring(0, 600).replace(/\n/g, "\n> ")}`;
+        }
+
+        return { detail, deadline, topics, outcomes };
+    } catch (e) {
+        console.error("fetchDeepDetailD2L error:", e);
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [] };
+    }
+}
+
+// ─────────────────────────────────────────────
+// Scraper for D2L Brightspace Page (API-based)
 // ─────────────────────────────────────────────
 async function scanD2LPage(sendResponse) {
-    console.log("🏁 Starting D2L Scraper...");
+    console.log("🏁 Starting D2L REST API Scraper...");
     
+    const url = window.location.href;
+    const match = url.match(/\/d2l\/(?:home|le\/lessons|le\/content)\/(\d+)/i);
+    const orgUnitId = match ? match[1] : null;
+    if (!orgUnitId) {
+        console.error("❌ Could not extract orgUnitId from URL:", url);
+        sendResponse({
+            action: "error",
+            message: "Cannot detect UoPeople Course ID from active tab URL. Make sure you are on a course page."
+        });
+        return;
+    }
+
     let courseName = document.title;
-    const siteTitleEl = Array.from(walkDomWithShadow(document.body))
-        .find(el => el.tagName?.toLowerCase() === "d2l-navigation-sitetitle" || el.className?.includes("d2l-navigation-sitetitle"));
-    if (siteTitleEl) {
-        const text = (siteTitleEl.innerText || siteTitleEl.textContent || "").trim();
-        if (text) courseName = text;
+    try {
+        const courseRes = await fetch(`/d2l/api/lp/1.60/courses/${orgUnitId}`, { credentials: "include" });
+        if (courseRes.ok) {
+            const courseData = await courseRes.json();
+            if (courseData.Name) courseName = courseData.Name;
+        }
+    } catch (e) {
+        console.warn("Failed to fetch course details from LP API:", e);
     }
     
     courseName = courseName
@@ -561,88 +676,151 @@ async function scanD2LPage(sendResponse) {
         .replace(/\s*-\s*Course Home/i, "")
         .trim();
 
-    let currentUnit = "General";
-    const tasks = [];
-    const seenUrls = new Set();
-    
-    const allElements = Array.from(walkDomWithShadow(document.body));
-    for (const el of allElements) {
-        const text = (el.innerText || el.textContent || "").trim();
-        
-        if (text && text.length < 80) {
-            const unitMatch = text.match(/^(Unit|Week|Module)\s*(\d+)[\s:-]*(.*)/i);
-            if (unitMatch) {
-                const unitNum = unitMatch[2];
-                const unitTitle = unitMatch[3] ? unitMatch[3].trim() : "";
-                currentUnit = `Unit ${unitNum}` + (unitTitle ? `: ${unitTitle}` : "");
-                continue;
+    console.log("🏁 Fetching D2L TOC for course:", orgUnitId);
+    let tocData;
+    let resTOC;
+    const versions = ["1.60", "1.50", "1.40", "1.0"];
+    for (const ver of versions) {
+        try {
+            resTOC = await fetch(`/d2l/api/le/${ver}/${orgUnitId}/content/toc`, { credentials: "include" });
+            if (resTOC.ok) {
+                tocData = await resTOC.json();
+                break;
             }
+        } catch (e) {
+            console.warn(`TOC fetch failed for version ${ver}:`, e);
         }
-        
-        if (el.tagName?.toUpperCase() === "A") {
-            const href = el.getAttribute("href");
-            if (!href) continue;
-            const resolved = resolveUrl(href, window.location.href);
-            if (seenUrls.has(resolved)) continue;
-            
-            const isDiscussion = resolved.includes("/discussions/") || resolved.includes("type=discussion");
-            const isAssignment = resolved.includes("/dropbox/") || resolved.includes("/assign/") || resolved.includes("type=dropbox");
-            const isQuiz = resolved.includes("/quizzes/") || resolved.includes("/quiz/") || resolved.includes("type=quiz");
-            const isReading = resolved.includes("/viewContent/") || resolved.includes("/lessons/") || resolved.includes("/content/") || resolved.includes("/quickLink/");
-            
-            if (isDiscussion || isAssignment || isQuiz || isReading) {
-                let taskTitle = text.replace(/Mark as done|已完成/gi, "").trim();
-                if (taskTitle.length < 3 || /Print|Next|Previous/i.test(taskTitle)) continue;
+    }
+
+    if (!tocData) {
+        console.error("❌ Failed to fetch D2L TOC");
+        sendResponse({
+            action: "error",
+            message: "Failed to retrieve course Table of Contents. Please make sure you are logged in."
+        });
+        return;
+    }
+
+    const tasks = [];
+    
+    function traverse(nodes, parentModuleName = "General") {
+        for (const node of nodes) {
+            if (node.Type === 0) { // Module
+                const title = node.Title.trim();
+                let unitName = parentModuleName === "General" ? title : parentModuleName;
+                if (node.Structure && node.Structure.length > 0) {
+                    traverse(node.Structure, unitName);
+                }
+            } else if (node.Type === 1) { // Topic
+                let rawType = "Reading";
+                if (node.ActivityType === 3) {
+                    rawType = "Assignment";
+                } else if (node.ActivityType === 4) {
+                    rawType = "Quiz";
+                } else if (node.ActivityType === 5 || node.ActivityType === 6) {
+                    rawType = "Discussion";
+                } else if (node.ActivityType === 10 || node.ActivityType === 11 || node.ActivityType === 12) {
+                    rawType = "Resource";
+                } else if (!node.ActivityType) {
+                    const titleLower = node.Title.toLowerCase();
+                    if (titleLower.includes("discussion")) {
+                        rawType = "Discussion";
+                    } else if (titleLower.includes("assignment") || titleLower.includes("portfolio")) {
+                        rawType = "Assignment";
+                    } else if (titleLower.includes("quiz") || titleLower.includes("exam")) {
+                        rawType = "Quiz";
+                    } else if (titleLower.includes("reading") || titleLower.includes("learning guide") || titleLower.includes("overview")) {
+                        rawType = "Reading";
+                    } else {
+                        rawType = "Resource";
+                    }
+                }
                 
-                seenUrls.add(resolved);
-                const deadline = findDeadlineInContainer(el);
+                const topicUrl = `https://learn.uopeople.edu/d2l/le/lessons/${orgUnitId}/topics/${node.Id}`;
+                
+                let deadline = "N/A";
+                if (node.DueDate) {
+                    deadline = formatD2LDate(node.DueDate);
+                }
+                
+                let downloadUrl = null;
+                if (node.Url) {
+                    downloadUrl = resolveUrl(node.Url, `https://learn.uopeople.edu`);
+                }
                 
                 tasks.push({
-                    title: cleanMD(taskTitle),
-                    url: resolved,
-                    unitId: currentUnit,
-                    deadline,
-                    rawType: isDiscussion ? "Discussion" : isAssignment ? "Assignment" : isQuiz ? "Quiz" : "Reading"
+                    id: node.Id,
+                    title: node.Title.trim(),
+                    url: topicUrl,
+                    downloadUrl: downloadUrl,
+                    unitId: parentModuleName,
+                    deadline: deadline,
+                    rawType: rawType
                 });
             }
         }
     }
 
+    traverse(tocData, "General");
     console.log(`🔍 Found ${tasks.length} D2L activities to deep scan.`);
 
-    const results = [];
+    const results = new Array(tasks.length);
     const enrichedUnitDetails = {};
+    const concurrencyLimit = 6;
+    let activeIndex = 0;
+    
+    async function worker() {
+        while (activeIndex < tasks.length) {
+            const idx = activeIndex++;
+            if (idx >= tasks.length) break;
+            const task = tasks[idx];
+            try {
+                console.log(`🔍 D2L Deep Scan: ${task.title}`);
+                const extra = await fetchDeepDetailD2L(orgUnitId, task, task.title);
+                const unitName = task.unitId || "General";
 
-    for (const task of tasks) {
-        console.log(`🔍 D2L Deep Scan: ${task.title}`);
-        const extra = await fetchDeepDetail(task.url, task.title);
-        const unitName = task.unitId || "General";
+                if (!enrichedUnitDetails[unitName]) {
+                    enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+                }
 
-        if (!enrichedUnitDetails[unitName]) {
-            enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+                if (extra.topics?.length > 0) {
+                    enrichedUnitDetails[unitName].topics = [...new Set([...enrichedUnitDetails[unitName].topics, ...extra.topics])];
+                }
+                if (extra.outcomes?.length > 0) {
+                    enrichedUnitDetails[unitName].outcomes = [...new Set([...enrichedUnitDetails[unitName].outcomes, ...extra.outcomes])];
+                }
+
+                results[idx] = {
+                    title: task.title,
+                    url: task.url,
+                    unitTime: unitName,
+                    detail: extra.detail,
+                    deadline: extra.deadline !== "N/A" ? extra.deadline : task.deadline,
+                    type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
+                };
+            } catch (e) {
+                console.error(`Error scanning task ${task.title}:`, e);
+                results[idx] = {
+                    title: task.title,
+                    url: task.url,
+                    unitTime: task.unitId || "General",
+                    detail: `❌ Scan failed: ${e.message}`,
+                    deadline: task.deadline,
+                    type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
+                };
+            }
         }
-
-        if (extra.topics?.length > 0) {
-            enrichedUnitDetails[unitName].topics = extra.topics;
-        }
-        if (extra.outcomes?.length > 0) {
-            enrichedUnitDetails[unitName].outcomes = extra.outcomes;
-        }
-
-        results.push({
-            title: task.title,
-            url: task.url,
-            unitTime: unitName,
-            detail: extra.detail,
-            deadline: extra.deadline !== "N/A" ? extra.deadline : task.deadline,
-            type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
-        });
     }
+
+    const workers = Array(concurrencyLimit).fill(null).map(() => worker());
+    await Promise.all(workers);
+
+    const finalResults = results.filter(r => r !== undefined);
 
     sendResponse({
         action: "final",
         courseName: cleanMD(courseName),
-        results,
+        results: finalResults,
         unitDetails: enrichedUnitDetails,
     });
 }
