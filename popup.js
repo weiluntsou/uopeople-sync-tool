@@ -405,6 +405,13 @@ async function appendDownloadedFilesToNote(course, filenames, apiKey) {
 // Note generation helpers
 // ─────────────────────────────────────────────────
 
+// Generate a clean Obsidian-safe note name for wiki-links
+function obsidianNoteName(course, title) {
+    const safeCourse = course.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const safeTitle = title.replace(/[/\\?%*:|"<>]/g, "-").replace(/\[|\]/g, "").trim();
+    return `${safeCourse} - ${safeTitle}`;
+}
+
 // Weekly summary table (English)
 function buildWeeklySummaryTable(results) {
     const unitMap = {};
@@ -431,8 +438,8 @@ function buildWeeklySummaryTable(results) {
     return table;
 }
 
-// NotebookLM Prompt — Professional Instructional Design format
-function buildNotebookLMPrompt(course, results, details) {
+// Deep-Learning Study Prompt — Universal template per unit
+function buildDeepLearningPrompt(course, results, details) {
     const ud = details || {};
 
     // Group tasks by unit
@@ -456,7 +463,7 @@ function buildNotebookLMPrompt(course, results, details) {
         // Topics block
         let topicsBlock = "";
         if (topics.length > 0) {
-            topicsBlock = topics.map(t => `  - $${t}$`).join("\n");
+            topicsBlock = topics.map(t => `  - ${t}`).join("\n");
         } else {
             const hints = data.readings.map(r => r.title).join(", ");
             topicsBlock = hints ? `  (derived from readings: ${hints})` : "  (not extracted — check Learning Guide Overview)";
@@ -477,67 +484,56 @@ function buildNotebookLMPrompt(course, results, details) {
             ? data.assignments.map(a => `  • ${a.title}`).join("\n")
             : "  (none this unit)";
 
-        // Key technical terms from topics (for $term$ emphasis)
-        const keyTerms = topics.slice(0, 4).map(t => `$${t.split(/[(),:]/)[0].trim()}$`).join(", ") || "$key concept$";
-
         blocks.push(
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 PROMPT FOR: ${unit}
+📌 UNIVERSAL DEEP-LEARNING PROMPT FOR: ${unit}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Role: Professional Instructional Designer & Senior Teaching Assistant.
+Role: Elite Academic Mentor, Instructional Designer & Subject Matter Expert in the field of ${course}.
 
-Task: Generate an 8–12 minute Educational Video Overview based on the "${course}" curriculum.
-
-───────────────────────────────────────
-Instructions for the Video Engine:
-───────────────────────────────────────
-
-Scope: Focus exclusively on the content for [${unit}].
-
-Narration Style: Use clear, academic, yet engaging English. Avoid overly robotic phrasing.
-Use phrases like "Let's dive into...", "Consider this analogy...", and "The takeaway here is...".
-
-Structure & Visual Emphasis:
-
-  🎬 Introduction (1 min):
-     Start with a high-level real-world problem that motivates this week's content.
-     Introduce the Weekly Topics and Learning Outcomes listed below.
-
-  📚 Deep Dive (5–6 mins):
-     For each topic (${keyTerms}), explain:
-       1. The Mechanism — what it is and how it works
-       2. The Impact — why it matters for system/real-world performance
-     Use the provided sources to reference specific details, architectures, or algorithms.
-
-  💬 Critical Thinking Section (2–3 mins):
-     Address the Discussion Prompt below.
-     Instead of giving direct answers, provide a Decision Matrix:
-       "When evaluating [the topic], consider these 3 factors..."
-     Help students build their own reasoning framework.
-
-  📝 Practical Guidance (1–2 mins):
-     Explicitly mention the Assignment Activity listed below.
-     Walk through the technical requirements and highlight common student errors.
-
-  🎯 Wrap-up (1 min):
-     Synthesize the Learning Outcomes into a "Big Picture" summary.
-     Remind students which outcomes they have now achieved.
-
-Technical Constraints:
-  - Ground every explanation in the uploaded source documents in this notebook.
-  - If sources discuss specific code or algorithms, ensure the video highlights those details.
-  - Maintain pacing that allows complex concepts to be absorbed — do not rush critical sections.
-  - Use $technical terms$ in the video script wherever you reference core concepts.
+Task: Generate an EXHAUSTIVE, UNTRUNCATED Deep-Dive Educational Guide and Script based on the curriculum materials provided. The absolute goal is to maximize cognitive depth, uncover foundational arguments, and provide a rigorous step-by-step logical scaffolding to help students successfully execute this week's assignment.
 
 ───────────────────────────────────────
-Input Data for this Video:
+Core Directive for Text Generation (Length & Depth Maximize):
+───────────────────────────────────────
+- DO NOT summarize, compress, or use high-level platitudes.
+- Expand on EVERY sub-topic with maximum granular detail. Write as much as the system limits allow.
+- If a concept involves processes, steps, or multi-sided arguments, exhaustively write out each one.
+
+───────────────────────────────────────
+Structure & Content Requirements:
 ───────────────────────────────────────
 
-Topics:
+  🎓 1. Expert Paradigm & Core Thinking Frameworks
+     - Identify the TOP 3 expert thinking frameworks, methodologies, or foundational paradigms used by professionals in this specific discipline to analyze this week's topics.
+     - Explain the "First Principles" of these frameworks. How do they allow an expert to instantly categorize and understand chaotic data or problems in this field?
+
+  📚 2. Cognitive Depth & Academic/Methodological Controversies
+     - For the weekly topics listed below, analyze them through the lens of "Core Mechanisms" and "Theoretical Boundaries".
+     - Uncover at least 2 major debates, conflicting schools of thought, or historical/methodological tensions inherent in this week's content (e.g., Paradigm A vs. Paradigm B, or empirical limitations of a certain model). Explain the evidence, rationale, and fatal flaws of each side.
+
+  📝 3. Assignment Scaffolding & Systematic Workflow Guide
+     - Analyze the specific [Assignment Activity] and [Learning Outcomes] provided below.
+     - Without giving direct answers or violating academic integrity, construct a comprehensive "Logical Execution Blueprint" for this assignment.
+     - Step-by-Step Breakdown: Walk through the logical phases a student must execute to complete the task successfully.
+     - Cognitive Traps & Common Blindspots: Explicitly warn the student about common intellectual errors, logical fallacies, or procedural mistakes students make in this exact assignment.
+     - Self-Verification Strategy: Provide a concrete method for the student to rigorously test or evaluate their own work before submission to ensure it aligns with grading rubric expectations.
+
+  🎯 4. Knowledge Projectization & Systemic Integration
+     - Synthesize this week's granular knowledge into a "Big Picture" conceptual map.
+     - Provide actionable instructions on how to modularize and index these core insights into a Personal Knowledge Management (PKM) system (like Obsidian), turning temporary class topics into a lifelong reusable intellectual asset.
+
+───────────────────────────────────────
+Input Data for this Unit:
+───────────────────────────────────────
+
+Course Context:
+  - Course Name: ${course}
+
+Weekly Topics:
 ${topicsBlock}
 
-Learning Outcomes (students will be able to):
+Learning Outcomes:
 ${outcomesBlock}
 
 Discussion Prompt(s):
@@ -574,7 +570,8 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     md += `| :--- | :--- | :--- | :--- |\n`;
     results.forEach((item) => {
         if (item.type !== "Resource") {
-            md += `| ${item.unitTime} | ${item.type} | [${item.title}](${item.url}) | ${item.deadline} |\n`;
+            const noteName = obsidianNoteName(course, item.title);
+            md += `| ${item.unitTime} | ${item.type} | [[${noteName}]] | ${item.deadline} |\n`;
         }
     });
 
@@ -609,11 +606,11 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         md += "_No UoPeople internal files detected._\n";
     }
 
-    // ── ⑤ NotebookLM Video Script Prompt ──
-    md += `\n---\n\n## 🎬 NotebookLM Video Script Prompt\n\n`;
-    md += `> **How to use:** Add the Reading sources (above) to your NotebookLM notebook, then paste this prompt into the chat to generate a teaching video script.\n\n`;
+    // ── ⑤ Deep-Learning Study Prompt ──
+    md += `\n---\n\n## 🎓 Deep-Learning Study Prompt\n\n`;
+    md += `> **How to use:** Add the Reading sources (above) to your NotebookLM notebook, then paste the prompt for the relevant unit into the chat to generate an exhaustive deep-dive study guide.\n\n`;
     md += "```\n";
-    md += buildNotebookLMPrompt(course, results, unitDetails);
+    md += buildDeepLearningPrompt(course, results, unitDetails);
     md += "\n```\n";
 
 
