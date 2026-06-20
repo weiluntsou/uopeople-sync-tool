@@ -290,6 +290,9 @@ async function handleDownload() {
         return;
     }
 
+    const courseCode = getCourseCode(courseName);
+    const safeCourseName = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
+
     downloadBtn.disabled = true;
     setActionStatus(`⬇️ Starting download of ${uopUrls.length} file(s)...`);
 
@@ -317,7 +320,7 @@ async function handleDownload() {
                 chrome.downloads.download(
                     {
                         url,
-                        filename: `UoPeople/${courseName.replace(/[/\\?%*:|"<>]/g, "-")}/${filename}`,
+                        filename: `UoPeople/${safeCourseName}/${filename}`,
                         conflictAction: "uniquify",
                         saveAs: false,
                     },
@@ -351,7 +354,7 @@ async function handleDownload() {
         await appendDownloadedFilesToNote(courseName, downloadedNames, obsidianApiKey);
         setActionStatus(
             `✅ Downloaded ${successCount}/${uopUrls.length} file(s) to:\n` +
-            `Downloads/UoPeople/${courseName}/\n\n` +
+            `Downloads/UoPeople/${safeCourseName}/\n\n` +
             `📝 Obsidian note updated with downloaded file list.`
         );
     } else {
@@ -361,7 +364,8 @@ async function handleDownload() {
 
 // Append downloaded file list to the existing Obsidian note
 async function appendDownloadedFilesToNote(course, filenames, apiKey) {
-    const safeName = course.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const courseCode = getCourseCode(course);
+    const safeName = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
     const path = `${getObsidianBaseUrl()}/vault/UoPeople/${safeName}_Summary.md`;
 
     try {
@@ -405,11 +409,24 @@ async function appendDownloadedFilesToNote(course, filenames, apiKey) {
 // Note generation helpers
 // ─────────────────────────────────────────────────
 
+// Extract only the course code prefix (e.g. "CS 3305-01" from "Course Home - CS 3305-01 - AY2026-T5")
+function getCourseCode(course) {
+    if (!course) return "Course";
+    let clean = course
+        .replace(/^(Homepage|Course Home|Home|Course Homepage)\s*-\s*/i, "")
+        .trim();
+    const codeMatch = clean.match(/\b([A-Z]{2,4}\s+\d{3,4}(?:-\d{2})?)\b/i);
+    if (codeMatch) {
+        return codeMatch[1].trim();
+    }
+    const parts = clean.split(/\s+-\s+/);
+    return parts[0].trim();
+}
+
 // Generate a clean Obsidian-safe note name for wiki-links
 function obsidianNoteName(course, title) {
-    const courseParts = course.split(/\s+-\s+/);
-    const coursePrefix = courseParts[0] || course;
-    const safeCourse = coursePrefix.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const courseCode = getCourseCode(course);
+    const safeCourse = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
     const safeTitle = title.replace(/[/\\?%*:|"<>]/g, "-").replace(/\[|\]/g, "").trim();
     return `${safeCourse}_${safeTitle}`;
 }
@@ -492,7 +509,8 @@ ${assignBlock}`;
 // ─────────────────────────────────────────────────
 async function uploadToObsidian(course, results, unitDetails, apiKey) {
     const dateStr = new Date().toISOString().split("T")[0];
-    const safeName = course.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const courseCode = getCourseCode(course);
+    const safeName = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
 
     let md = `---\ncourse: "${course}"\nsynced: "${dateStr}"\n---\n\n`;
     md += `# ${course}\n\n`;
