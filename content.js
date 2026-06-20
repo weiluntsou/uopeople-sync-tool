@@ -140,6 +140,113 @@ function extractListFromOfflineDoc(containerEl, headingPattern) {
     return [];
 }
 
+function extractAllListsFromOfflineDoc(containerEl, headingPattern) {
+    if (!containerEl) return [];
+
+    const allItems = [];
+
+    // ── Strategy A: scan all elements sequentially (state machine) ──
+    const all = Array.from(containerEl.querySelectorAll(
+        "h1,h2,h3,h4,h5,h6,p,li,strong,b"
+    ));
+    let capturing = false;
+    let currentSectionItems = [];
+
+    for (const el of all) {
+        const tag = el.tagName.toUpperCase();
+        if (tag !== "LI" && el.closest("li")) continue;
+
+        const text = (el.textContent || "").trim();
+        if (!text) continue;
+
+        const isHeadingTag = ["H1", "H2", "H3", "H4", "H5", "H6"].includes(tag);
+        const isInlineLabel = ["STRONG", "B"].includes(tag) && text.length <= 100 && !el.closest("li");
+        const isPLabel = tag === "P" && text.length <= 120 && !el.closest("li");
+        const isHeading = isHeadingTag || isInlineLabel || isPLabel;
+
+        if (isHeading) {
+            if (headingPattern.test(text)) {
+                if (capturing && currentSectionItems.length > 0) {
+                    allItems.push(...currentSectionItems);
+                    currentSectionItems = [];
+                }
+                capturing = true;
+                continue;
+            } else if (capturing && (isHeadingTag || isInlineLabel)) {
+                capturing = false;
+                if (currentSectionItems.length > 0) {
+                    allItems.push(...currentSectionItems);
+                    currentSectionItems = [];
+                }
+            }
+        }
+
+        if (capturing) {
+            if (tag === "LI") {
+                const clone = el.cloneNode(true);
+                clone.querySelectorAll("ul,ol").forEach(n => n.remove());
+                const t = (clone.textContent || "").trim().replace(/^[\u2022\-\*]\s*/, "");
+                if (t.length > 3) currentSectionItems.push(t);
+            } else if (tag === "P" && !isHeading) {
+                if (text.length > 3 && text.length < 300 &&
+                    !headingPattern.test(text) &&
+                    !/^(topics?|(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?|by\s+the\s+end)/i.test(text)) {
+                    currentSectionItems.push(text.replace(/^[\u2022\-\*\d\.\)]\s*/, ""));
+                }
+            }
+        }
+    }
+    if (capturing && currentSectionItems.length > 0) {
+        allItems.push(...currentSectionItems);
+    }
+
+    // ── Strategy B: heading → next sibling UL/OL ──
+    const candidates = Array.from(
+        containerEl.querySelectorAll("h1,h2,h3,h4,h5,h6,p,strong,b")
+    );
+    for (const el of candidates) {
+        const elText = (el.textContent || "").trim();
+        if (elText.length > 120 || !headingPattern.test(elText)) continue;
+        if (el.closest("li")) continue;
+
+        const list = findNextListSibling(el) || findNextListSibling(el.parentElement);
+        if (list) {
+            const listItems = Array.from(list.querySelectorAll(":scope > li"))
+                .map(li => {
+                    const clone = li.cloneNode(true);
+                    clone.querySelectorAll("ul,ol").forEach(n => n.remove());
+                    return (clone.textContent || "").trim();
+                })
+                .filter(t => t.length > 3);
+            for (const item of listItems) {
+                if (!allItems.includes(item)) {
+                    allItems.push(item);
+                }
+            }
+        }
+    }
+
+    // ── Strategy C: regex search on plain text (multiple matches) ──
+    const fullText = containerEl.textContent || "";
+    const regex = new RegExp("(?:" + headingPattern.source + ")[s]?\\s*[:\\n]?([\\s\\S]{0,800})", "gi");
+    for (const match of fullText.matchAll(regex)) {
+        if (match[1]) {
+            const extracted = match[1]
+                .split(/\n/)
+                .map(l => l.replace(/^[\u2022\-\*\d\.\)]\s*/, "").trim())
+                .filter(l => l.length > 5 && !/^(topics?|(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?|by\s+the\s+end)/i.test(l))
+                .slice(0, 10);
+            for (const item of extracted) {
+                if (!allItems.includes(item)) {
+                    allItems.push(item);
+                }
+            }
+        }
+    }
+
+    return [...new Set(allItems.map(i => i.trim()))].filter(i => i.length > 3);
+}
+
 // ─────────────────────────────────────────────
 // 判斷是否為 Reading Assignment 類型的頁面
 // ─────────────────────────────────────────────
@@ -387,8 +494,8 @@ async function fetchOverviewMetadata(bookUrl) {
             console.log(`📊 [Overview] Title: "${pageTitle}" | Selector: ${content === d.body ? "body" : CONTENT_SELECTORS.find(s => d.querySelector(s) === content) || "?"}`);
             console.log(`📊 [Overview] innerHTML (800): ${(content.innerHTML || "").substring(0, 800)}`);
 
-            const topics = cleanExtracted(extractListFromOfflineDoc(content, /topics?/i), false);
-            const outcomes = cleanExtracted(extractListFromOfflineDoc(content, /learning\s+outcomes?/i), true);
+            const topics = cleanExtracted(extractAllListsFromOfflineDoc(content, /topics?/i), false);
+            const outcomes = cleanExtracted(extractAllListsFromOfflineDoc(content, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true);
 
             console.log(`📊 [Overview] Topics (clean): [${topics.join(" | ")}]`);
             console.log(`📊 [Overview] Outcomes (clean): [${outcomes.join(" | ")}]`);
@@ -594,8 +701,8 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                         }
                         
                         const overviewMeta = {
-                            topics: cleanExtracted(extractListFromOfflineDoc(doc.body, /topics?/i), false),
-                            outcomes: cleanExtracted(extractListFromOfflineDoc(doc.body, /learning\s+outcomes?/i), true)
+                            topics: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /topics?/i), false),
+                            outcomes: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true)
                         };
                         topics = overviewMeta.topics;
                         outcomes = overviewMeta.outcomes;
@@ -618,8 +725,8 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                 }
                 
                 const overviewMeta = {
-                    topics: cleanExtracted(extractListFromOfflineDoc(descDoc.body, /topics?/i), false),
-                    outcomes: cleanExtracted(extractListFromOfflineDoc(descDoc.body, /learning\s+outcomes?/i), true)
+                    topics: cleanExtracted(extractAllListsFromOfflineDoc(descDoc.body, /topics?/i), false),
+                    outcomes: cleanExtracted(extractAllListsFromOfflineDoc(descDoc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true)
                 };
                 topics = overviewMeta.topics;
                 outcomes = overviewMeta.outcomes;
@@ -994,8 +1101,8 @@ async function scanMoodlePage(sendResponse) {
                 ".course-section-summary, .no-overflow, .sectionbody"
             );
 
-            const topics = extractListAfterHeading(summaryEl, /topics?/i);
-            const outcomes = extractListAfterHeading(summaryEl, /learning\s+outcomes?/i);
+            const topics = cleanExtracted(extractAllListsFromOfflineDoc(summaryEl, /topics?/i), false);
+            const outcomes = cleanExtracted(extractAllListsFromOfflineDoc(summaryEl, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true);
 
             unitMap[sec.id] = {
                 name: cleanMD(txt.split("\n")[0]),

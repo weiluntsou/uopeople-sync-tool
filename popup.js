@@ -407,9 +407,20 @@ async function appendDownloadedFilesToNote(course, filenames, apiKey) {
 
 // Generate a clean Obsidian-safe note name for wiki-links
 function obsidianNoteName(course, title) {
-    const safeCourse = course.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const courseParts = course.split(/\s+-\s+/);
+    const coursePrefix = courseParts[0] || course;
+    const safeCourse = coursePrefix.replace(/[/\\?%*:|"<>]/g, "-").trim();
     const safeTitle = title.replace(/[/\\?%*:|"<>]/g, "-").replace(/\[|\]/g, "").trim();
-    return `${safeCourse} - ${safeTitle}`;
+    return `${safeCourse}_${safeTitle}`;
+}
+
+// Generate a clean Markdown heading anchor link (compatible with Obsidian / standard markdown)
+function getHeaderAnchor(unitName) {
+    const clean = unitName.toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, "")
+        .trim()
+        .replace(/\s+/g, "-");
+    return `📘-${clean}`;
 }
 
 // Prefix every line with "> " for Obsidian callout body
@@ -493,7 +504,8 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     results.forEach((item) => {
         if (item.type !== "Resource") {
             const noteName = obsidianNoteName(course, item.title);
-            md += `| [[#📘 ${item.unitTime}|${item.unitTime}]] | ${item.type} | [[${noteName}]] | ${item.deadline} |\n`;
+            const anchor = getHeaderAnchor(item.unitTime);
+            md += `| [${item.unitTime}](#${anchor}) | ${item.type} | [[${noteName}]] | ${item.deadline} |\n`;
         }
     });
 
