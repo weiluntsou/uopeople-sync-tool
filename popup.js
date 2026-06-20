@@ -412,80 +412,14 @@ function obsidianNoteName(course, title) {
     return `${safeCourse} - ${safeTitle}`;
 }
 
-// Weekly summary table (English)
-function buildWeeklySummaryTable(results) {
-    const unitMap = {};
-    for (const item of results) {
-        const unit = item.unitTime || "General";
-        if (!unitMap[unit]) unitMap[unit] = { readings: [], discussions: [], assignments: [] };
-        if (item.type === "Reading") unitMap[unit].readings.push(item);
-        else if (item.type === "Discussion") unitMap[unit].discussions.push(item);
-        else if (item.type === "Assignment") unitMap[unit].assignments.push(item);
-    }
-
-    let table = `| Week / Unit | Reading Materials | Discussion Topics | Assignments | Nearest Deadline |\n`;
-    table += `| :--- | :--- | :--- | :--- | :--- |\n`;
-
-    for (const [unit, data] of Object.entries(unitMap)) {
-        const readingStr = data.readings.length > 0 ? data.readings.map(r => r.title).join(", ") : "—";
-        const discussStr = data.discussions.length > 0 ? data.discussions.map(d => `[${d.title}](${d.url})`).join("<br>") : "—";
-        const assignStr = data.assignments.length > 0 ? data.assignments.map(a => `[${a.title}](${a.url})`).join("<br>") : "—";
-        const deadlines = [...data.discussions, ...data.assignments].map(i => i.deadline).filter(d => d && d !== "N/A");
-        const deadline = deadlines.length > 0 ? deadlines[0] : "N/A";
-        table += `| ${unit} | ${readingStr} | ${discussStr} | ${assignStr} | ${deadline} |\n`;
-    }
-
-    return table;
+// Prefix every line with "> " for Obsidian callout body
+function calloutLines(text) {
+    return text.split("\n").map(l => `> ${l}`).join("\n");
 }
 
-// Deep-Learning Study Prompt — Universal template per unit
-function buildDeepLearningPrompt(course, results, details) {
-    const ud = details || {};
-
-    // Group tasks by unit
-    const unitMap = {};
-    for (const item of results) {
-        const unit = item.unitTime || "General";
-        if (!unitMap[unit]) unitMap[unit] = { readings: [], discussions: [], assignments: [] };
-        if (item.type === "Reading") unitMap[unit].readings.push(item);
-        else if (item.type === "Discussion") unitMap[unit].discussions.push(item);
-        else if (item.type === "Assignment") unitMap[unit].assignments.push(item);
-    }
-
-    // Build one prompt block per unit
-    const blocks = [];
-
-    for (const [unit, data] of Object.entries(unitMap)) {
-        const meta = ud[unit] || {};
-        const topics = meta.topics || [];
-        const outcomes = meta.outcomes || [];
-
-        // Topics block
-        let topicsBlock = "";
-        if (topics.length > 0) {
-            topicsBlock = topics.map(t => `  - ${t}`).join("\n");
-        } else {
-            const hints = data.readings.map(r => r.title).join(", ");
-            topicsBlock = hints ? `  (derived from readings: ${hints})` : "  (not extracted — check Learning Guide Overview)";
-        }
-
-        // Learning Outcomes block
-        let outcomesBlock = outcomes.length > 0
-            ? outcomes.map(o => `  • ${o}`).join("\n")
-            : "  (not extracted — check Learning Guide Overview)";
-
-        // Discussion Prompts block
-        let discussBlock = data.discussions.length > 0
-            ? data.discussions.map(d => `  • "${d.title}"`).join("\n")
-            : "  (none this unit)";
-
-        // Assignments block
-        let assignBlock = data.assignments.length > 0
-            ? data.assignments.map(a => `  • ${a.title}`).join("\n")
-            : "  (none this unit)";
-
-        blocks.push(
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Build the Universal Deep-Learning Prompt for a single unit (returns raw string, NOT prefixed)
+function buildUnitPrompt(course, unit, topicsBlock, outcomesBlock, discussBlock, assignBlock) {
+    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 UNIVERSAL DEEP-LEARNING PROMPT FOR: ${unit}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -510,18 +444,18 @@ Structure & Content Requirements:
 
   📚 2. Cognitive Depth & Academic/Methodological Controversies
      - For the weekly topics listed below, analyze them through the lens of "Core Mechanisms" and "Theoretical Boundaries".
-     - Uncover at least 2 major debates, conflicting schools of thought, or historical/methodological tensions inherent in this week's content (e.g., Paradigm A vs. Paradigm B, or empirical limitations of a certain model). Explain the evidence, rationale, and fatal flaws of each side.
+     - Uncover at least 2 major debates, conflicting schools of thought, or historical/methodological tensions inherent in this week's content (e.g., Paradigm A vs. Paradigm B). Explain the evidence, rationale, and fatal flaws of each side.
 
   📝 3. Assignment Scaffolding & Systematic Workflow Guide
      - Analyze the specific [Assignment Activity] and [Learning Outcomes] provided below.
      - Without giving direct answers or violating academic integrity, construct a comprehensive "Logical Execution Blueprint" for this assignment.
      - Step-by-Step Breakdown: Walk through the logical phases a student must execute to complete the task successfully.
      - Cognitive Traps & Common Blindspots: Explicitly warn the student about common intellectual errors, logical fallacies, or procedural mistakes students make in this exact assignment.
-     - Self-Verification Strategy: Provide a concrete method for the student to rigorously test or evaluate their own work before submission to ensure it aligns with grading rubric expectations.
+     - Self-Verification Strategy: Provide a concrete method for the student to rigorously test or evaluate their own work before submission.
 
   🎯 4. Knowledge Projectization & Systemic Integration
      - Synthesize this week's granular knowledge into a "Big Picture" conceptual map.
-     - Provide actionable instructions on how to modularize and index these core insights into a Personal Knowledge Management (PKM) system (like Obsidian), turning temporary class topics into a lifelong reusable intellectual asset.
+     - Provide actionable instructions on how to modularize and index these core insights into a Personal Knowledge Management (PKM) system (like Obsidian).
 
 ───────────────────────────────────────
 Input Data for this Unit:
@@ -540,22 +474,10 @@ Discussion Prompt(s):
 ${discussBlock}
 
 Assignment Activity:
-${assignBlock}`
-        );
-    }
-
-    return blocks.join("\n\n\n");
+${assignBlock}`;
 }
 
-// ─────────────────────────────────────────────────
-
-
-
-
-// ─────────────────────────────────────────────────
-
-
-// Upload full note to Obsidian
+// Upload full note to Obsidian (Unit-Centric Architecture)
 // ─────────────────────────────────────────────────
 async function uploadToObsidian(course, results, unitDetails, apiKey) {
     const dateStr = new Date().toISOString().split("T")[0];
@@ -564,68 +486,162 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     let md = `---\ncourse: "${course}"\nsynced: "${dateStr}"\n---\n\n`;
     md += `# ${course}\n\n`;
 
-    // ── ① Course Schedule ──
-    md += `## 📅 Course Schedule\n\n`;
+    // ── ① Quick Dashboard ──
+    md += `## 📅 Quick Dashboard\n\n`;
     md += `| Unit Period | Type | Task | Deadline |\n`;
     md += `| :--- | :--- | :--- | :--- |\n`;
     results.forEach((item) => {
         if (item.type !== "Resource") {
             const noteName = obsidianNoteName(course, item.title);
-            md += `| ${item.unitTime} | ${item.type} | [[${noteName}]] | ${item.deadline} |\n`;
+            md += `| [[#📘 ${item.unitTime}|${item.unitTime}]] | ${item.type} | [[${noteName}]] | ${item.deadline} |\n`;
         }
     });
 
-    // ── ② Weekly Key Points Summary ──
-    md += `\n---\n\n## 📊 Weekly Key Points Summary\n\n`;
-    md += buildWeeklySummaryTable(results);
-
-    // ── ③ NotebookLM Source Links (external URLs only) ──
-    md += `\n---\n\n## 📒 NotebookLM Source Links\n\n`;
-    md += `> **How to use:** Copy the URLs below → Go to [NotebookLM](https://notebooklm.google.com/) → Add Source → Website → paste each URL.\n`;
-    md += `> *(UoPeople internal URLs are excluded — use the Download button in the extension instead.)*\n\n`;
-
-    if (externalUrls.length > 0) {
-        md += "```\n";
-        externalUrls.forEach((url) => { md += `${url}\n`; });
-        md += "```\n";
-    } else {
-        md += "_No external reading links found for this course._\n";
+    // ── ② Per-Unit Self-Contained Sections ──
+    const unitMap = {};
+    for (const item of results) {
+        const unit = item.unitTime || "General";
+        if (!unitMap[unit]) unitMap[unit] = { readings: [], discussions: [], assignments: [], resources: [] };
+        if (item.type === "Reading") unitMap[unit].readings.push(item);
+        else if (item.type === "Discussion") unitMap[unit].discussions.push(item);
+        else if (item.type === "Assignment") unitMap[unit].assignments.push(item);
+        else unitMap[unit].resources.push(item);
     }
 
-    // ── ④ UoPeople Internal Files (for download reference) ──
-    md += `\n---\n\n## 🔒 UoPeople Internal Files (Login Required)\n\n`;
-    md += `> These URLs require authentication. Use the **⬇️ Download UoP Files** button in the extension to bulk-download them.\n\n`;
+    for (const [unit, data] of Object.entries(unitMap)) {
+        const meta = (unitDetails || {})[unit] || {};
+        const topics = meta.topics || [];
+        const outcomes = meta.outcomes || [];
 
-    if (uopUrls.length > 0) {
-        md += `| # | URL |\n| :--- | :--- |\n`;
-        uopUrls.forEach((url, i) => {
-            const name = decodeURIComponent(url.split("/").pop().split("?")[0]);
-            md += `| ${i + 1} | [${name}](${url}) |\n`;
-        });
-    } else {
-        md += "_No UoPeople internal files detected._\n";
+        // Find the earliest deadline in this unit
+        const allDeadlines = [...data.discussions, ...data.assignments]
+            .map(i => i.deadline)
+            .filter(d => d && d !== "N/A");
+        const deadlineStr = allDeadlines.length > 0 ? allDeadlines[0] : "N/A";
+
+        md += `\n---\n\n## 📘 ${unit}\n`;
+        md += `> 📅 **Deadline:** ${deadlineStr}\n\n`;
+
+        // ── Action Checklist ──
+        md += `### 🔗 本週核心行動清單\n`;
+        if (data.readings.length > 0) {
+            for (const r of data.readings) {
+                const noteName = obsidianNoteName(course, r.title);
+                md += `* [ ] **Reading**: [[${noteName}]]\n`;
+            }
+        } else {
+            md += `* [ ] **Reading**: 閱讀本週教材\n`;
+        }
+        if (data.discussions.length > 0) {
+            for (const d of data.discussions) {
+                const noteName = obsidianNoteName(course, d.title);
+                md += `* [ ] **Discussion**: [[${noteName}]]${d.deadline !== "N/A" ? ` — 📅 ${d.deadline}` : ""}\n`;
+            }
+        } else {
+            md += `* [ ] **Discussion**: 參與討論區互動\n`;
+        }
+        if (data.assignments.length > 0) {
+            for (const a of data.assignments) {
+                const noteName = obsidianNoteName(course, a.title);
+                md += `* [ ] **Assignment**: [[${noteName}]]${a.deadline !== "N/A" ? ` — 📅 ${a.deadline}` : ""}\n`;
+            }
+        } else {
+            md += `* [ ] **Assignment**: 完成本週指定作業\n`;
+        }
+        md += `\n`;
+
+        // ── Foldable Prompt Callout ──
+        let topicsBlock = "";
+        if (topics.length > 0) {
+            topicsBlock = topics.map(t => `  - ${t}`).join("\n");
+        } else {
+            const hints = data.readings.map(r => r.title).join(", ");
+            topicsBlock = hints ? `  (derived from readings: ${hints})` : "  (not extracted — check Learning Guide Overview)";
+        }
+
+        let outcomesBlock = outcomes.length > 0
+            ? outcomes.map(o => `  • ${o}`).join("\n")
+            : "  (not extracted — check Learning Guide Overview)";
+
+        // Discussion: use actual scraped prompt text, NOT just the title
+        let discussBlock = "";
+        if (data.discussions.length > 0) {
+            discussBlock = data.discussions.map(d => {
+                const promptText = d.discussionPrompt || d.detail || d.title;
+                const cleaned = promptText.replace(/\n{3,}/g, "\n\n").substring(0, 3000);
+                return `  • ${d.title}\n    ${cleaned}`;
+            }).join("\n");
+        } else {
+            discussBlock = "  (none this unit)";
+        }
+
+        // Assignment: use actual scraped instructions, NOT just the name
+        let assignBlock = "";
+        if (data.assignments.length > 0) {
+            assignBlock = data.assignments.map(a => {
+                const instrText = a.assignmentInstructions || a.detail || a.title;
+                const cleaned = instrText.replace(/\n{3,}/g, "\n\n").substring(0, 3000);
+                return `  • ${a.title}\n    ${cleaned}`;
+            }).join("\n");
+        } else {
+            assignBlock = "  (none this unit)";
+        }
+
+        const promptRaw = buildUnitPrompt(course, unit, topicsBlock, outcomesBlock, discussBlock, assignBlock);
+        md += `> [!🤖]- 點擊展開：本週 NotebookLM 專用終極 Prompt\n`;
+        md += `> \`\`\`markdown\n`;
+        md += calloutLines(promptRaw) + "\n";
+        md += `> \`\`\`\n\n`;
+
+        // ── Foldable Scraped Content Callout ──
+        md += `> [!📝]- 點擊展開：本週教材與作業原始文本 (Scraped Overview & Rubrics)\n`;
+        md += `> ### 📖 Scraped Text & Details\n`;
+
+        const allItems = [...data.readings, ...data.discussions, ...data.assignments, ...data.resources];
+        if (allItems.length > 0) {
+            for (const item of allItems) {
+                md += `> \n`;
+                md += `> **${item.type}: ${item.title}**\n`;
+                md += `> - URL: ${item.url}\n`;
+                if (item.deadline && item.deadline !== "N/A") {
+                    md += `> - Deadline: ${item.deadline}\n`;
+                }
+                if (item.detail && item.detail.length > 5) {
+                    const detailText = item.detail.replace(/\n{3,}/g, "\n\n");
+                    md += calloutLines(detailText) + "\n";
+                }
+                md += `> \n`;
+            }
+        } else {
+            md += `> _No scraped content available for this unit._\n`;
+        }
+
+        // Links for this unit
+        md += `> \n`;
+        md += `> ### 🔗 Required Links\n`;
+        const unitLinks = [];
+        for (const item of allItems) {
+            if (item.detail) {
+                for (const m of item.detail.matchAll(/\[([\s\S]*?)\]\((https?:\/\/[^)]+)\)/g)) {
+                    const label = m[1].replace(/^[🎥📄]\s*/, "").trim();
+                    const linkUrl = m[2];
+                    if (!linkUrl.includes("my.uopeople.edu") && !linkUrl.includes("learn.uopeople.edu")) {
+                        unitLinks.push({ label, url: linkUrl });
+                    }
+                }
+            }
+        }
+        if (unitLinks.length > 0) {
+            for (const link of unitLinks) {
+                md += `> - [${link.label}](${link.url})\n`;
+            }
+        } else {
+            md += `> _No external links found for this unit._\n`;
+        }
+        md += `\n`;
     }
 
-    // ── ⑤ Deep-Learning Study Prompt ──
-    md += `\n---\n\n## 🎓 Deep-Learning Study Prompt\n\n`;
-    md += `> **How to use:** Add the Reading sources (above) to your NotebookLM notebook, then paste the prompt for the relevant unit into the chat to generate an exhaustive deep-dive study guide.\n\n`;
-    md += "```\n";
-    md += buildDeepLearningPrompt(course, results, unitDetails);
-    md += "\n```\n";
-
-
-    // ── ⑥ Full Material Details ──
-    md += `\n---\n\n## 📖 Material Details\n\n`;
-    results.forEach((item) => {
-        md += `### ${item.title}\n`;
-        md += `- **Type**: ${item.type}\n`;
-        md += `- **Unit**: ${item.unitTime}\n`;
-        md += `- **Deadline**: ${item.deadline}\n`;
-        md += `- **URL**: ${item.url}\n\n`;
-        if (item.detail) md += `${item.detail}\n`;
-        md += `\n---\n`;
-    });
-
+    // ── Upload to Obsidian ──
     try {
         const url = `${getObsidianBaseUrl()}/vault/UoPeople/${encodeURIComponent(safeName)}_Summary.md`;
         console.log(`📤 Uploading to Obsidian: ${url}`);

@@ -558,7 +558,7 @@ function formatD2LDate(isoStr) {
 // ─────────────────────────────────────────────
 // Deep detail fetcher for D2L using Valence APIs
 // ─────────────────────────────────────────────
-async function fetchDeepDetailD2L(orgUnitId, topic, title) {
+async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropboxMap) {
     try {
         const ver = "1.60";
         const res = await fetch(`/d2l/api/le/${ver}/${orgUnitId}/content/topics/${topic.id}`, { credentials: "include" });
@@ -569,6 +569,8 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title) {
         let detail = "";
         let topics = [];
         let outcomes = [];
+        let discussionPrompt = "";
+        let assignmentInstructions = "";
 
         if (isReadingAssignmentPage(title, topic.url)) {
             console.log(`📖 Reading topic properties: ${title}`);
@@ -588,7 +590,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title) {
                         if (entries.length > 0) {
                             detail = `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
                         } else if (fallbackText && fallbackText.length > 20) {
-                            detail = `#### 📖 Reading Assignment Text\n> ${fallbackText.replace(/\n/g, "\n> ")}`;
+                            detail = `#### 📖 Reading Assignment Text\n${fallbackText}`;
                         }
                         
                         const overviewMeta = {
@@ -612,7 +614,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title) {
                 if (entries.length > 0) {
                     detail = `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
                 } else if (fallbackText && fallbackText.length > 20) {
-                    detail = `#### 📖 Reading Assignment Text\n> ${fallbackText.replace(/\n/g, "\n> ")}`;
+                    detail = `#### 📖 Reading Assignment Text\n${fallbackText}`;
                 }
                 
                 const overviewMeta = {
@@ -623,6 +625,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title) {
                 outcomes = overviewMeta.outcomes;
             }
         } else {
+            // ── General task (Discussion / Assignment / Quiz / Resource) ──
             let rawText = "";
             if (data.Description?.Html) {
                 const descDoc = new DOMParser().parseFromString(data.Description.Html, "text/html");
@@ -631,13 +634,72 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title) {
             if (!rawText) {
                 rawText = data.Description?.Text || "No content";
             }
-            detail = `> ${rawText.substring(0, 600).replace(/\n/g, "\n> ")}`;
+            // Full capture — no truncation
+            detail = rawText.substring(0, 5000);
+
+            // ── Discussion: fetch actual prompt from Discussions API ──
+            if (topic.rawType === "Discussion" && discussionMap) {
+                const matchKey = title.trim().toLowerCase();
+                const discTopic = discussionMap[matchKey];
+                if (discTopic) {
+                    if (discTopic.Description?.Html) {
+                        const discDoc = new DOMParser().parseFromString(discTopic.Description.Html, "text/html");
+                        discussionPrompt = getText(discDoc.body).substring(0, 5000);
+                    } else if (discTopic.Description?.Text) {
+                        discussionPrompt = discTopic.Description.Text.substring(0, 5000);
+                    }
+                    console.log(`💬 Found discussion prompt for "${title}" (${discussionPrompt.length} chars)`);
+                }
+                // Fallback: use the content topic description as the prompt
+                if (!discussionPrompt && rawText.length > 10) {
+                    discussionPrompt = rawText.substring(0, 5000);
+                }
+            }
+
+            // ── Assignment: fetch instructions + rubrics from Dropbox API ──
+            if ((topic.rawType === "Assignment" || topic.rawType === "Quiz") && dropboxMap) {
+                const matchKey = title.trim().toLowerCase();
+                const dbFolder = dropboxMap[matchKey];
+                if (dbFolder) {
+                    let instrText = "";
+                    if (dbFolder.Instructions?.Html) {
+                        const instrDoc = new DOMParser().parseFromString(dbFolder.Instructions.Html, "text/html");
+                        instrText = getText(instrDoc.body).substring(0, 5000);
+                    } else if (dbFolder.Instructions?.Text) {
+                        instrText = dbFolder.Instructions.Text.substring(0, 5000);
+                    }
+                    if (instrText) {
+                        assignmentInstructions = instrText;
+                        // Enrich detail with the full instructions
+                        if (instrText.length > detail.length) {
+                            detail = instrText;
+                        }
+                    }
+                    console.log(`📝 Found assignment instructions for "${title}" (${assignmentInstructions.length} chars)`);
+
+                    // Rubric data (if available in the folder object)
+                    if (dbFolder.Rubrics && dbFolder.Rubrics.length > 0) {
+                        let rubricText = "\n\n--- Rubric ---\n";
+                        for (const rubric of dbFolder.Rubrics) {
+                            rubricText += `${rubric.Name || "Rubric"}:\n`;
+                            if (rubric.Description?.Text) {
+                                rubricText += `${rubric.Description.Text}\n`;
+                            }
+                        }
+                        assignmentInstructions += rubricText;
+                    }
+                }
+                // Fallback: use the content topic description
+                if (!assignmentInstructions && rawText.length > 10) {
+                    assignmentInstructions = rawText.substring(0, 5000);
+                }
+            }
         }
 
-        return { detail, deadline, topics, outcomes };
+        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions };
     } catch (e) {
         console.error("fetchDeepDetailD2L error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [] };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "" };
     }
 }
 
@@ -805,6 +867,44 @@ async function scanD2LPage(sendResponse) {
     traverse(tocData, "General");
     console.log(`🔍 Found ${tasks.length} D2L activities to deep scan.`);
 
+    // ── Prefetch Discussion Forums & Topics ──
+    const discussionMap = {};
+    try {
+        const forumsRes = await fetch(`/d2l/api/le/1.60/${orgUnitId}/discussions/forums/`, { credentials: "include" });
+        if (forumsRes.ok) {
+            const forums = await forumsRes.json();
+            for (const forum of forums) {
+                try {
+                    const dtRes = await fetch(`/d2l/api/le/1.60/${orgUnitId}/discussions/forums/${forum.ForumId}/topics/`, { credentials: "include" });
+                    if (dtRes.ok) {
+                        const dTopics = await dtRes.json();
+                        for (const dt of dTopics) {
+                            if (dt.Name) discussionMap[dt.Name.trim().toLowerCase()] = dt;
+                        }
+                    }
+                } catch (e) { /* skip */ }
+            }
+            console.log(`💬 Prefetched ${Object.keys(discussionMap).length} discussion topics`);
+        }
+    } catch (e) {
+        console.warn("Discussion prefetch failed (non-critical):", e.message);
+    }
+
+    // ── Prefetch Dropbox (Assignment) Folders ──
+    const dropboxMap = {};
+    try {
+        const foldersRes = await fetch(`/d2l/api/le/1.60/${orgUnitId}/dropbox/folders/`, { credentials: "include" });
+        if (foldersRes.ok) {
+            const folders = await foldersRes.json();
+            for (const f of folders) {
+                if (f.Name) dropboxMap[f.Name.trim().toLowerCase()] = f;
+            }
+            console.log(`📝 Prefetched ${Object.keys(dropboxMap).length} dropbox folders`);
+        }
+    } catch (e) {
+        console.warn("Dropbox prefetch failed (non-critical):", e.message);
+    }
+
     const results = new Array(tasks.length);
     const enrichedUnitDetails = {};
     const concurrencyLimit = 6;
@@ -817,7 +917,7 @@ async function scanD2LPage(sendResponse) {
             const task = tasks[idx];
             try {
                 console.log(`🔍 D2L Deep Scan: ${task.title}`);
-                const extra = await fetchDeepDetailD2L(orgUnitId, task, task.title);
+                const extra = await fetchDeepDetailD2L(orgUnitId, task, task.title, discussionMap, dropboxMap);
                 const unitName = task.unitId || "General";
 
                 if (!enrichedUnitDetails[unitName]) {
@@ -839,6 +939,8 @@ async function scanD2LPage(sendResponse) {
                     detail: extra.detail,
                     deadline: extra.deadline !== "N/A" ? extra.deadline : task.deadline,
                     type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
+                    discussionPrompt: extra.discussionPrompt || "",
+                    assignmentInstructions: extra.assignmentInstructions || "",
                 };
             } catch (e) {
                 console.error(`Error scanning task ${task.title}:`, e);
@@ -850,6 +952,8 @@ async function scanD2LPage(sendResponse) {
                     detail: `❌ Scan failed: ${e.message}`,
                     deadline: task.deadline,
                     type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
+                    discussionPrompt: "",
+                    assignmentInstructions: "",
                 };
             }
         }
