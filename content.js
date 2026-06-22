@@ -20,6 +20,46 @@ function resolveUrl(href, baseUrl) {
     }
 }
 
+// 將 HTML 元素轉換為帶有 Markdown 連結的乾淨文字，並過濾掉雜訊連結
+function htmlToMarkdown(element, targetUrl) {
+    if (!element) return "";
+    if (typeof element === "string") return element;
+    const clone = element.cloneNode(true);
+    if (clone.querySelectorAll) {
+        const links = clone.querySelectorAll("a");
+        links.forEach((a) => {
+            const text = (a.textContent || "").trim();
+            const href = resolveUrl(a.getAttribute("href") || "", targetUrl);
+
+            const noiseKeywords = [
+                "UoPeople APA Tutorials",
+                "Learning Resource Center",
+                "Guidelines for Giving Meaningful Replies",
+                "LIRN",
+                "Tips for Searching LIRN"
+            ];
+
+            const isNoise = noiseKeywords.some(noise =>
+                text.toLowerCase().includes(noise.toLowerCase()) ||
+                href.toLowerCase().includes(noise.toLowerCase())
+            );
+
+            if (isNoise) {
+                a.parentNode.removeChild(a);
+            } else if (href && href.startsWith("http")) {
+                const markdownLink = `[${text}](${href})`;
+                const textNode = clone.ownerDocument.createTextNode(markdownLink);
+                a.parentNode.replaceChild(textNode, a);
+            } else {
+                const textNode = clone.ownerDocument.createTextNode(text);
+                a.parentNode.replaceChild(textNode, a);
+            }
+        });
+    }
+    return getText(clone);
+}
+
+
 // ─────────────────────────────────────────────
 // Helper: walk next siblings to find a UL or OL
 // ─────────────────────────────────────────────
@@ -583,7 +623,7 @@ async function fetchOverviewMetadata(bookUrl) {
 async function fetchDeepDetail(url, title) {
     try {
         const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A", topics: [], outcomes: [] };
+        if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "" };
         const html = await res.text();
         const doc = new DOMParser().parseFromString(html, "text/html");
 
@@ -599,6 +639,8 @@ async function fetchDeepDetail(url, title) {
         let detail = "";
         let topics = [];
         let outcomes = [];
+        let discussionPrompt = "";
+        let assignmentInstructions = "";
 
         const isD2L = window.location.hostname.includes("learn.uopeople.edu");
 
@@ -640,14 +682,20 @@ async function fetchDeepDetail(url, title) {
                 bodyEl = doc.querySelector(sel);
                 if (bodyEl) break;
             }
-            const rawText = bodyEl ? getText(bodyEl).substring(0, 600) : "No content";
-            detail = `> ${rawText.replace(/\n/g, "\n> ")}`;
+            const rawText = bodyEl ? htmlToMarkdown(bodyEl, url) : "No content";
+            detail = rawText;
+
+            if (url.includes("forum")) {
+                discussionPrompt = rawText;
+            } else if (url.includes("assign")) {
+                assignmentInstructions = rawText;
+            }
         }
 
-        return { detail, deadline, topics, outcomes };
+        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions };
     } catch (e) {
         console.error("fetchDeepDetail error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [] };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "" };
     }
 }
 
@@ -803,13 +851,13 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
             let rawText = "";
             if (data.Description?.Html) {
                 const descDoc = new DOMParser().parseFromString(data.Description.Html, "text/html");
-                rawText = getText(descDoc.body);
+                rawText = htmlToMarkdown(descDoc.body, topic.url);
             }
             if (!rawText) {
                 rawText = data.Description?.Text || "No content";
             }
             // Full capture — no truncation
-            detail = rawText.substring(0, 5000);
+            detail = rawText;
 
             // ── Discussion: fetch actual prompt from Discussions API ──
             if (topic.rawType === "Discussion" && discussionMap) {
@@ -818,15 +866,15 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                 if (discTopic) {
                     if (discTopic.Description?.Html) {
                         const discDoc = new DOMParser().parseFromString(discTopic.Description.Html, "text/html");
-                        discussionPrompt = getText(discDoc.body).substring(0, 5000);
+                        discussionPrompt = htmlToMarkdown(discDoc.body, topic.url);
                     } else if (discTopic.Description?.Text) {
-                        discussionPrompt = discTopic.Description.Text.substring(0, 5000);
+                        discussionPrompt = discTopic.Description.Text;
                     }
                     console.log(`💬 Found discussion prompt for "${title}" (${discussionPrompt.length} chars)`);
                 }
                 // Fallback: use the content topic description as the prompt
                 if (!discussionPrompt && rawText.length > 10) {
-                    discussionPrompt = rawText.substring(0, 5000);
+                    discussionPrompt = rawText;
                 }
             }
 
@@ -838,9 +886,9 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                     let instrText = "";
                     if (dbFolder.Instructions?.Html) {
                         const instrDoc = new DOMParser().parseFromString(dbFolder.Instructions.Html, "text/html");
-                        instrText = getText(instrDoc.body).substring(0, 5000);
+                        instrText = htmlToMarkdown(instrDoc.body, topic.url);
                     } else if (dbFolder.Instructions?.Text) {
-                        instrText = dbFolder.Instructions.Text.substring(0, 5000);
+                        instrText = dbFolder.Instructions.Text;
                     }
                     if (instrText) {
                         assignmentInstructions = instrText;
@@ -865,7 +913,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                 }
                 // Fallback: use the content topic description
                 if (!assignmentInstructions && rawText.length > 10) {
-                    assignmentInstructions = rawText.substring(0, 5000);
+                    assignmentInstructions = rawText;
                 }
             }
         }
@@ -1249,6 +1297,8 @@ async function scanMoodlePage(sendResponse) {
                     : task.url.includes("book")
                         ? "Reading"
                         : "Resource",
+            discussionPrompt: extra.discussionPrompt || "",
+            assignmentInstructions: extra.assignmentInstructions || "",
         });
     }
 

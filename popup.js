@@ -231,6 +231,21 @@ function categorizeUrls(results) {
             for (const m of item.detail.matchAll(/\[([\s\S]*?)\]\((https?:\/\/[^)]+)\)/g)) {
                 const label = m[1].replace(/^[🎥📄]\s*/, "").trim();
                 const url = m[2];
+
+                const noiseKeywords = [
+                    "UoPeople APA Tutorials",
+                    "Learning Resource Center",
+                    "Guidelines for Giving Meaningful Replies",
+                    "LIRN",
+                    "Tips for Searching LIRN"
+                ];
+
+                const isNoise = noiseKeywords.some(noise =>
+                    label.toLowerCase().includes(noise.toLowerCase()) ||
+                    url.toLowerCase().includes(noise.toLowerCase())
+                );
+                if (isNoise) continue;
+
                 if (isUoPeopleFile(url)) {
                     internal.add(url);
                     if (label && label.length < 100 && !label.includes("\n")) {
@@ -560,40 +575,21 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         const deadlineStr = allDeadlines.length > 0 ? allDeadlines[0] : "N/A";
 
         md += `\n---\n\n## 📘 ${unit}\n`;
-        md += `> 📅 **Deadline:** ${deadlineStr}\n\n`;
+        md += `> 📅 **Deadline:** ${deadlineStr} | ⏳ 狀態：未開始\n\n`;
 
         // ── Action Checklist ──
         md += `### 🔗 本週核心行動清單\n`;
-        if (data.readings.length > 0) {
-            for (const r of data.readings) {
-                const hasDeadline = r.deadline && r.deadline !== "N/A";
-                const noteName = obsidianNoteName(course, r.title);
-                md += `* [ ] **Reading**: ${hasDeadline ? `[[${noteName}]]` : r.title}\n`;
-            }
-        } else {
-            md += `* [ ] **Reading**: 閱讀本週教材\n`;
-        }
-        if (data.discussions.length > 0) {
-            for (const d of data.discussions) {
-                const hasDeadline = d.deadline && d.deadline !== "N/A";
-                const noteName = obsidianNoteName(course, d.title);
-                md += `* [ ] **Discussion**: ${hasDeadline ? `[[${noteName}]] — 📅 ${d.deadline}` : d.title}\n`;
-            }
-        } else {
-            md += `* [ ] **Discussion**: 參與討論區互動\n`;
-        }
-        if (data.assignments.length > 0) {
-            for (const a of data.assignments) {
-                const hasDeadline = a.deadline && a.deadline !== "N/A";
-                const noteName = obsidianNoteName(course, a.title);
-                md += `* [ ] **Assignment**: ${hasDeadline ? `[[${noteName}]] — 📅 ${a.deadline}` : a.title}\n`;
-            }
-        } else {
-            md += `* [ ] **Assignment**: 完成本週指定作業\n`;
-        }
-        md += `\n`;
+        md += `* [ ] **Reading**: 閱讀本週教材\n`;
+        md += `* [ ] **Discussion**: 參與討論區互動\n`;
+        md += `* [ ] **Assignment**: 完成本週指定作業\n\n`;
 
-        // ── Foldable Prompt Callout ──
+        // ── Foldable Audio Prompt Callout ──
+        md += `> [!🎧]- 點擊展開：生成 Podcast 的 Audio Prompt (供聆聽吸收)\n`;
+        md += `> Copy the following prompt into NotebookLM's Audio Overview generation box:\n`;
+        md += `> \n`;
+        md += `> Generate an engaging podcast discussing the core concepts and real-world impact of the topics in ${unit}. Don't read code or math formulas; focus on the big picture, architectural trade-offs, and why this matters to professionals in the field.\n\n`;
+
+        // ── Prepare Prompt Blocks ──
         let topicsBlock = "";
         if (topics.length > 0) {
             topicsBlock = topics.map(t => `  - ${t}`).join("\n");
@@ -611,7 +607,7 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         if (data.discussions.length > 0) {
             discussBlock = data.discussions.map(d => {
                 const promptText = d.discussionPrompt || d.detail || d.title;
-                const cleaned = promptText.replace(/\n{3,}/g, "\n\n").substring(0, 3000);
+                const cleaned = promptText.replace(/\n{3,}/g, "\n\n");
                 return `  • ${d.title}\n    ${cleaned}`;
             }).join("\n");
         }
@@ -627,7 +623,7 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         if (data.assignments.length > 0) {
             assignBlock = data.assignments.map(a => {
                 const instrText = a.assignmentInstructions || a.detail || a.title;
-                const cleaned = instrText.replace(/\n{3,}/g, "\n\n").substring(0, 3000);
+                const cleaned = instrText.replace(/\n{3,}/g, "\n\n");
                 return `  • ${a.title}\n    ${cleaned}`;
             }).join("\n");
         }
@@ -638,38 +634,72 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
             assignBlock = "  (none this unit)";
         }
 
-        const promptRaw = buildUnitPrompt(course, unit, topicsBlock, outcomesBlock, discussBlock, assignBlock);
-        md += `> [!🤖]- 點擊展開：本週 NotebookLM 專用終極 Prompt\n`;
-        md += `> \`\`\`markdown\n`;
-        md += calloutLines(promptRaw) + "\n";
-        md += `> \`\`\`\n\n`;
+        // ── Foldable Chat Prompt Callout ──
+        let chatPrompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        chatPrompt += `📌 UNIVERSAL CHAT PROMPT FOR ASSIGNMENT & GOALS: ${unit}\n`;
+        chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        chatPrompt += `\n`;
+        chatPrompt += `Task: You are an elite professor teaching "${cleanedCourse}". Generate an EXHAUSTIVE, step-by-step Study & Assignment Guide based on the provided materials.\n`;
+        chatPrompt += `\n`;
+        chatPrompt += `───────────────────────────────────────\n`;
+        chatPrompt += `Dynamic Role Adaptation (自適應學科引擎):\n`;
+        chatPrompt += `───────────────────────────────────────\n`;
+        chatPrompt += `Analyze the "${cleanedCourse}" and the topics. Auto-adjust your pedagogical approach:\n`;
+        chatPrompt += `- IF Computer Science/Programming: Focus on System Architecture, logic flow, pseudocode, edge cases, and debugging strategies.\n`;
+        chatPrompt += `- IF Math/Statistics: Focus on formulas, assumptions, hypothesis testing, and step-by-step calculation logic (without giving final answers).\n`;
+        chatPrompt += `- IF Humanities/Social Sciences: Focus on theoretical frameworks, historical context, debate mapping, and thesis statement formulation.\n`;
+        chatPrompt += `\n`;
+        chatPrompt += `───────────────────────────────────────\n`;
+        chatPrompt += `Structure Requirements (嚴格輸出結構):\n`;
+        chatPrompt += `───────────────────────────────────────\n`;
+        chatPrompt += `  🎯 1. Outcome Achievement Checklist\n`;
+        chatPrompt += `     - Map core concepts to the provided [Learning Outcomes]. Create a specific "Active Recall Checklist" to prove mastery.\n`;
+        chatPrompt += `\n`;
+        chatPrompt += `  🧠 2. Core Mechanisms & Common Fallacies\n`;
+        chatPrompt += `     - Explain the underlying logic of this week's topics. Explicitly warn against the Top 2 most common student mistakes or misconceptions in this specific subject.\n`;
+        chatPrompt += `\n`;
+        chatPrompt += `  📝 3. Assignment Execution Blueprint (作業實作鷹架)\n`;
+        chatPrompt += `     - Scan the [Assignment Activity] data. \n`;
+        chatPrompt += `     - ⚠️ FAIL-SAFE: If specific assignment questions/tasks are missing, STOP and ask the user to provide them.\n`;
+        chatPrompt += `     - Provide a professional execution scaffolding tailored to the subject (e.g., File structure & logic flow for CS; Analytical workflow for Math; Essay outline for Humanities).\n`;
+        chatPrompt += `     - Provide a "Self-Verification Strategy" to test the work against the rubric.\n`;
+        chatPrompt += `\n`;
+        chatPrompt += `───────────────────────────────────────\n`;
+        chatPrompt += `Input Data for this Unit:\n`;
+        chatPrompt += `───────────────────────────────────────\n`;
+        chatPrompt += `Course Name: ${cleanedCourse}\n`;
+        chatPrompt += `Topics: \n${topicsBlock}\n`;
+        chatPrompt += `Learning Outcomes: \n${outcomesBlock}\n`;
+        chatPrompt += `Assignment Details & Rubrics: \n${assignBlock}\n`;
+        chatPrompt += `Discussion Prompts: \n${discussBlock}`;
+
+        md += `> [!🤖]- 點擊展開：生成作業破關攻略的 Chat Prompt (供實作檢核)\n`;
+        md += `> Copy the following prompt into NotebookLM's Text Chat box:\n`;
+        md += `> \n`;
+        md += calloutLines(chatPrompt) + "\n\n";
 
         // ── Foldable Scraped Content Callout ──
-        md += `> [!📝]- 點擊展開：本週教材與作業原始文本 (Scraped Overview & Rubrics)\n`;
-        md += `> ### 📖 Scraped Text & Details\n`;
-
+        let scrapedContentData = "";
         const allItems = [...data.readings, ...data.discussions, ...data.assignments, ...data.resources];
         if (allItems.length > 0) {
-            for (const item of allItems) {
-                md += `> \n`;
-                md += `> **${item.type}: ${item.title}**\n`;
-                md += `> - URL: ${item.url}\n`;
+            allItems.forEach((item, idx) => {
+                if (idx > 0) scrapedContentData += "\n";
+                scrapedContentData += `**${item.type}: ${item.title}**\n`;
+                scrapedContentData += `- URL: ${item.url}\n`;
                 if (item.deadline && item.deadline !== "N/A") {
-                    md += `> - Deadline: ${item.deadline}\n`;
+                    scrapedContentData += `- Deadline: ${item.deadline}\n`;
                 }
                 if (item.detail && item.detail.length > 5) {
                     const detailText = item.detail.replace(/\n{3,}/g, "\n\n");
-                    md += calloutLines(detailText) + "\n";
+                    scrapedContentData += detailText + "\n";
                 }
-                md += `> \n`;
-            }
+            });
         } else {
-            md += `> _No scraped content available for this unit._\n`;
+            scrapedContentData += `_No scraped content available for this unit._\n`;
         }
 
         // Links for this unit
-        md += `> \n`;
-        md += `> ### 🔗 Required Links\n`;
+        let requiredLinksData = "";
         const unitLinks = [];
         for (const item of allItems) {
             if (item.detail) {
@@ -677,19 +707,29 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
                     const label = m[1].replace(/^[🎥📄]\s*/, "").trim();
                     const linkUrl = m[2];
                     if (!linkUrl.includes("my.uopeople.edu") && !linkUrl.includes("learn.uopeople.edu")) {
-                        unitLinks.push({ label, url: linkUrl });
+                        // Check for duplicates
+                        if (!unitLinks.some(ul => ul.url === linkUrl)) {
+                            unitLinks.push({ label, url: linkUrl });
+                        }
                     }
                 }
             }
         }
         if (unitLinks.length > 0) {
-            for (const link of unitLinks) {
-                md += `> - [${link.label}](${link.url})\n`;
-            }
+            unitLinks.forEach((link, idx) => {
+                if (idx > 0) requiredLinksData += "\n";
+                requiredLinksData += `- [${link.label}](${link.url})`;
+            });
         } else {
-            md += `> _No external links found for this unit._\n`;
+            requiredLinksData += `_No external links found for this unit._`;
         }
-        md += `\n`;
+
+        md += `> [!📝]- 點擊展開：本週教材與作業原始文本 (Scraped Data Dump)\n`;
+        md += `> ### 📖 Scraped Text & Details\n`;
+        md += calloutLines(scrapedContentData.trim()) + "\n";
+        md += `> \n`;
+        md += `> ### 🔗 Required Links\n`;
+        md += calloutLines(requiredLinksData.trim()) + "\n";
     }
 
     // ── Upload to Obsidian ──
