@@ -623,7 +623,7 @@ async function fetchOverviewMetadata(bookUrl) {
 async function fetchDeepDetail(url, title) {
     try {
         const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "" };
+        if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", rubricText: null };
         const html = await res.text();
         const doc = new DOMParser().parseFromString(html, "text/html");
 
@@ -692,10 +692,39 @@ async function fetchDeepDetail(url, title) {
             }
         }
 
-        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions };
+        let rubricText = null;
+        if (title.includes("Assignment Activity")) {
+            try {
+                const topicPageRes = await fetch(url, { credentials: "include" });
+                if (topicPageRes.ok) {
+                    const pageHtml = await topicPageRes.text();
+                    const pageDoc = new DOMParser().parseFromString(pageHtml, "text/html");
+                    const rubricSelectors = [
+                        ".d2l-htmlblock-untrusted",
+                        ".d2l-page-title",
+                        '[data-rel="description"]',
+                        ".d2l-le-itemsummary"
+                    ];
+                    let matchedEl = null;
+                    for (const sel of rubricSelectors) {
+                        matchedEl = pageDoc.querySelector(sel);
+                        if (matchedEl && getText(matchedEl).trim().length > 0) {
+                            break;
+                        }
+                    }
+                    if (matchedEl) {
+                        rubricText = htmlToMarkdown(matchedEl, url);
+                    }
+                }
+            } catch (e) {
+                console.warn(`Secondary fetch failed for ${title}:`, e);
+            }
+        }
+
+        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions, rubricText };
     } catch (e) {
         console.error("fetchDeepDetail error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "" };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", rubricText: null };
     }
 }
 
@@ -918,10 +947,39 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
             }
         }
 
-        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions, extractedDiscussionPrompt, extractedAssignmentInstructions };
+        let rubricText = null;
+        if (title.includes("Assignment Activity")) {
+            try {
+                const topicPageRes = await fetch(topic.url, { credentials: "include" });
+                if (topicPageRes.ok) {
+                    const pageHtml = await topicPageRes.text();
+                    const pageDoc = new DOMParser().parseFromString(pageHtml, "text/html");
+                    const rubricSelectors = [
+                        ".d2l-htmlblock-untrusted",
+                        ".d2l-page-title",
+                        '[data-rel="description"]',
+                        ".d2l-le-itemsummary"
+                    ];
+                    let matchedEl = null;
+                    for (const sel of rubricSelectors) {
+                        matchedEl = pageDoc.querySelector(sel);
+                        if (matchedEl && getText(matchedEl).trim().length > 0) {
+                            break;
+                        }
+                    }
+                    if (matchedEl) {
+                        rubricText = htmlToMarkdown(matchedEl, topic.url);
+                    }
+                }
+            } catch (e) {
+                console.warn(`Secondary fetch failed for ${title}:`, e);
+            }
+        }
+
+        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions, extractedDiscussionPrompt, extractedAssignmentInstructions, rubricText };
     } catch (e) {
         console.error("fetchDeepDetailD2L error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", extractedDiscussionPrompt: "", extractedAssignmentInstructions: "" };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", extractedDiscussionPrompt: "", extractedAssignmentInstructions: "", rubricText: null };
     }
 }
 
@@ -1171,6 +1229,7 @@ async function scanD2LPage(sendResponse) {
                     type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
                     discussionPrompt: extra.discussionPrompt || "",
                     assignmentInstructions: extra.assignmentInstructions || "",
+                    rubricText: extra.rubricText || null,
                 };
             } catch (e) {
                 console.error(`Error scanning task ${task.title}:`, e);
@@ -1184,6 +1243,7 @@ async function scanD2LPage(sendResponse) {
                     type: task.rawType === "Quiz" ? "Assignment" : task.rawType,
                     discussionPrompt: "",
                     assignmentInstructions: "",
+                    rubricText: null,
                 };
             }
         }
@@ -1299,6 +1359,7 @@ async function scanMoodlePage(sendResponse) {
                         : "Resource",
             discussionPrompt: extra.discussionPrompt || "",
             assignmentInstructions: extra.assignmentInstructions || "",
+            rubricText: extra.rubricText || null,
         });
     }
 

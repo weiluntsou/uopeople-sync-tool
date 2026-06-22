@@ -468,6 +468,56 @@ function calloutLines(text) {
     return text.split("\n").map(l => `> ${l}`).join("\n");
 }
 
+// 過濾 Learning Outcomes 雜訊
+function cleanLearningOutcomes(outcomes) {
+    if (!outcomes || !Array.isArray(outcomes)) return [];
+    const patterns = [
+        /^section \d+\.\d+/i,
+        /^read \(optional\)/i,
+        /^\. [A-Z][a-z]+,/,
+        /banner image/i,
+        /freepik/i,
+        /licensed under/i,
+        /^by the e/i,
+        /^as needed/i,
+        /^callout$/i,
+        /^to access lirn/i,
+        /log in to the/i,
+        /^select computer science/i,
+        /^search using/i,
+        /^view the online/i,
+        /^read chapter/i
+    ];
+    return outcomes.filter(o => {
+        const trimmed = o.trim();
+        if (trimmed.length < 20) return false;
+        return !patterns.some(pattern => pattern.test(trimmed));
+    });
+}
+
+// 過濾 Topics 雜訊
+function cleanTopics(topics) {
+    if (!topics || !Array.isArray(topics)) return [];
+    const patterns = [
+        /^by the/i,
+        /^as needed/i,
+        /^callout/i,
+        /^to access/i,
+        /^log in/i,
+        /^select /i,
+        /^search using/i,
+        /^view the/i,
+        /^read chapter/i,
+        /^section \d+\.\d+/i,
+        /\.?\s+[A-Z][a-z]+,\s+[A-Z]\./
+    ];
+    return topics.filter(t => {
+        const trimmed = t.trim();
+        if (trimmed.length < 10 || trimmed.length > 200) return false;
+        return !patterns.some(pattern => pattern.test(trimmed));
+    });
+}
+
 // Build the Universal Deep-Learning Prompt for a single unit (returns raw string, NOT prefixed)
 function buildUnitPrompt(course, unit, topicsBlock, outcomesBlock, discussBlock, assignBlock) {
     return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -590,16 +640,18 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         md += `> Generate an engaging podcast discussing the core concepts and real-world impact of the topics in ${unit}. Don't read code or math formulas; focus on the big picture, architectural trade-offs, and why this matters to professionals in the field.\n\n`;
 
         // ── Prepare Prompt Blocks ──
+        const cleanedTopicsList = cleanTopics(topics);
         let topicsBlock = "";
-        if (topics.length > 0) {
-            topicsBlock = topics.map(t => `  - ${t}`).join("\n");
+        if (cleanedTopicsList.length > 0) {
+            topicsBlock = cleanedTopicsList.map(t => `  - ${t}`).join("\n");
         } else {
             const hints = data.readings.map(r => r.title).join(", ");
             topicsBlock = hints ? `  (derived from readings: ${hints})` : "  (not extracted — check Learning Guide Overview)";
         }
 
-        let outcomesBlock = outcomes.length > 0
-            ? outcomes.map(o => `  • ${o}`).join("\n")
+        const cleanedOutcomesList = cleanLearningOutcomes(outcomes);
+        let outcomesBlock = cleanedOutcomesList.length > 0
+            ? cleanedOutcomesList.map(o => `  • ${o}`).join("\n")
             : "  (not extracted — check Learning Guide Overview)";
 
         // Discussion: use actual scraped prompt text, NOT just the title
@@ -618,20 +670,29 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
             discussBlock = "  (none this unit)";
         }
 
-        // Assignment: use actual scraped instructions, NOT just the name
+        // Assignment: check if there's an Assignment Activity with rubricText > 100
         let assignBlock = "";
-        if (data.assignments.length > 0) {
-            assignBlock = data.assignments.map(a => {
-                const instrText = a.assignmentInstructions || a.detail || a.title;
-                const cleaned = instrText.replace(/\n{3,}/g, "\n\n");
-                return `  • ${a.title}\n    ${cleaned}`;
-            }).join("\n");
-        }
-        if (meta.extractedAssignmentInstructions) {
-            assignBlock = (assignBlock ? assignBlock + "\n\n" : "") + `  [Extracted Instructions from Guide]:\n    ${meta.extractedAssignmentInstructions.trim().replace(/\n/g, "\n    ")}`;
-        }
-        if (!assignBlock) {
-            assignBlock = "  (none this unit)";
+        const assignmentActivity = data.assignments.find(a => a.title.includes("Assignment Activity"));
+        if (assignmentActivity) {
+            if (assignmentActivity.rubricText && assignmentActivity.rubricText.trim().length > 100) {
+                assignBlock = assignmentActivity.rubricText.trim();
+            } else {
+                assignBlock = `⚠️ NOTE: Assignment questions were not automatically extracted.\nPlease paste the assignment instructions here before continuing.\nAssignment page URL: ${assignmentActivity.url || "(no URL)"}`;
+            }
+        } else {
+            if (data.assignments.length > 0) {
+                assignBlock = data.assignments.map(a => {
+                    const instrText = a.assignmentInstructions || a.detail || a.title;
+                    const cleaned = instrText.replace(/\n{3,}/g, "\n\n");
+                    return `  • ${a.title}\n    ${cleaned}`;
+                }).join("\n");
+            }
+            if (meta.extractedAssignmentInstructions) {
+                assignBlock = (assignBlock ? assignBlock + "\n\n" : "") + `  [Extracted Instructions from Guide]:\n    ${meta.extractedAssignmentInstructions.trim().replace(/\n/g, "\n    ")}`;
+            }
+            if (!assignBlock) {
+                assignBlock = "  (none this unit)";
+            }
         }
 
         // ── Foldable Chat Prompt Callout ──
@@ -692,6 +753,9 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
                 if (item.detail && item.detail.length > 5) {
                     const detailText = item.detail.replace(/\n{3,}/g, "\n\n");
                     scrapedContentData += detailText + "\n";
+                }
+                if (item.rubricText && item.rubricText.length > 5) {
+                    scrapedContentData += "\n--- Rubric & Instructions ---\n" + item.rubricText + "\n";
                 }
             });
         } else {
