@@ -247,6 +247,47 @@ function extractAllListsFromOfflineDoc(containerEl, headingPattern) {
     return [...new Set(allItems.map(i => i.trim()))].filter(i => i.length > 3);
 }
 
+// Extract all text under a specific heading until the next heading of equal or higher level
+function extractSectionByHeading(containerEl, headingPattern) {
+    if (!containerEl) return "";
+
+    const all = Array.from(containerEl.querySelectorAll(
+        "h1,h2,h3,h4,h5,h6,p,li,div,ul,ol"
+    ));
+    let capturing = false;
+    let headingLevel = 9; // level of the matching heading (e.g. 3 for H3)
+    const contentParts = [];
+
+    for (const el of all) {
+        const tag = el.tagName.toUpperCase();
+
+        const match = tag.match(/^H([1-6])$/);
+        if (match) {
+            const currentLevel = parseInt(match[1], 10);
+            const text = (el.textContent || "").trim();
+
+            if (headingPattern.test(text)) {
+                capturing = true;
+                headingLevel = currentLevel;
+                continue;
+            } else if (capturing && currentLevel <= headingLevel) {
+                break;
+            }
+        }
+
+        if (capturing) {
+            if (["P", "LI"].includes(tag)) {
+                const text = (el.textContent || "").trim();
+                if (text && !contentParts.includes(text)) {
+                    contentParts.push(text);
+                }
+            }
+        }
+    }
+
+    return contentParts.join("\n\n");
+}
+
 // ─────────────────────────────────────────────
 // 判斷是否為 Reading Assignment 類型的頁面
 // ─────────────────────────────────────────────
@@ -678,6 +719,8 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         let outcomes = [];
         let discussionPrompt = "";
         let assignmentInstructions = "";
+        let extractedDiscussionPrompt = "";
+        let extractedAssignmentInstructions = "";
 
         if (isReadingAssignmentPage(title, topic.url)) {
             console.log(`📖 Reading topic properties: ${title}`);
@@ -706,6 +749,18 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                         };
                         topics = overviewMeta.topics;
                         outcomes = overviewMeta.outcomes;
+
+                        const extDiscussion = extractSectionByHeading(doc.body, /discussion\s+(?:assignment|forum|prompt)/i);
+                        const extWritten = extractSectionByHeading(doc.body, /written\s+assignment/i);
+                        const extJournal = extractSectionByHeading(doc.body, /learning\s+journal/i);
+                        const extProg = extractSectionByHeading(doc.body, /programming\s+assignment/i);
+                        const extPortfolio = extractSectionByHeading(doc.body, /portfolio\s+activity/i);
+                        
+                        if (extDiscussion) extractedDiscussionPrompt = extDiscussion;
+                        if (extWritten) extractedAssignmentInstructions += `\n[Written Assignment]\n${extWritten}`;
+                        if (extJournal) extractedAssignmentInstructions += `\n[Learning Journal]\n${extJournal}`;
+                        if (extProg) extractedAssignmentInstructions += `\n[Programming Assignment]\n${extProg}`;
+                        if (extPortfolio) extractedAssignmentInstructions += `\n[Portfolio Activity]\n${extPortfolio}`;
                     }
                 } catch (e) {
                     console.warn("Failed to fetch direct reading file:", e);
@@ -730,6 +785,18 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                 };
                 topics = overviewMeta.topics;
                 outcomes = overviewMeta.outcomes;
+
+                const extDiscussion = extractSectionByHeading(descDoc.body, /discussion\s+(?:assignment|forum|prompt)/i);
+                const extWritten = extractSectionByHeading(descDoc.body, /written\s+assignment/i);
+                const extJournal = extractSectionByHeading(descDoc.body, /learning\s+journal/i);
+                const extProg = extractSectionByHeading(descDoc.body, /programming\s+assignment/i);
+                const extPortfolio = extractSectionByHeading(descDoc.body, /portfolio\s+activity/i);
+                
+                if (extDiscussion) extractedDiscussionPrompt = extDiscussion;
+                if (extWritten) extractedAssignmentInstructions += `\n[Written Assignment]\n${extWritten}`;
+                if (extJournal) extractedAssignmentInstructions += `\n[Learning Journal]\n${extJournal}`;
+                if (extProg) extractedAssignmentInstructions += `\n[Programming Assignment]\n${extProg}`;
+                if (extPortfolio) extractedAssignmentInstructions += `\n[Portfolio Activity]\n${extPortfolio}`;
             }
         } else {
             // ── General task (Discussion / Assignment / Quiz / Resource) ──
@@ -803,10 +870,10 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
             }
         }
 
-        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions };
+        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions, extractedDiscussionPrompt, extractedAssignmentInstructions };
     } catch (e) {
         console.error("fetchDeepDetailD2L error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "" };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", extractedDiscussionPrompt: "", extractedAssignmentInstructions: "" };
     }
 }
 
@@ -1036,6 +1103,14 @@ async function scanD2LPage(sendResponse) {
                 }
                 if (extra.outcomes?.length > 0) {
                     enrichedUnitDetails[unitName].outcomes = [...new Set([...enrichedUnitDetails[unitName].outcomes, ...extra.outcomes])];
+                }
+                if (extra.extractedDiscussionPrompt) {
+                    enrichedUnitDetails[unitName].extractedDiscussionPrompt = 
+                        (enrichedUnitDetails[unitName].extractedDiscussionPrompt || "") + "\n\n" + extra.extractedDiscussionPrompt;
+                }
+                if (extra.extractedAssignmentInstructions) {
+                    enrichedUnitDetails[unitName].extractedAssignmentInstructions = 
+                        (enrichedUnitDetails[unitName].extractedAssignmentInstructions || "") + "\n\n" + extra.extractedAssignmentInstructions;
                 }
 
                 results[idx] = {

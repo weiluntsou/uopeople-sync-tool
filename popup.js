@@ -290,8 +290,8 @@ async function handleDownload() {
         return;
     }
 
-    const courseCode = getCourseCode(courseName);
-    const safeCourseName = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const cleanedCourse = getCleanedCourseName(courseName);
+    const safeCourseName = cleanedCourse.replace(/[/\\?%*:|"<>]/g, "-").trim();
 
     downloadBtn.disabled = true;
     setActionStatus(`⬇️ Starting download of ${uopUrls.length} file(s)...`);
@@ -364,8 +364,8 @@ async function handleDownload() {
 
 // Append downloaded file list to the existing Obsidian note
 async function appendDownloadedFilesToNote(course, filenames, apiKey) {
-    const courseCode = getCourseCode(course);
-    const safeName = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const cleanedCourse = getCleanedCourseName(course);
+    const safeName = cleanedCourse.replace(/[/\\?%*:|"<>]/g, "-").trim();
     const path = `${getObsidianBaseUrl()}/vault/UoPeople/${safeName}_Summary.md`;
 
     try {
@@ -408,6 +408,14 @@ async function appendDownloadedFilesToNote(course, filenames, apiKey) {
 // ─────────────────────────────────────────────────
 // Note generation helpers
 // ─────────────────────────────────────────────────
+
+// Clean common prefixes (like "Homepage - ") from the course title
+function getCleanedCourseName(course) {
+    if (!course) return "Course";
+    return course
+        .replace(/^(Homepage|Course Home|Home|Course Homepage)\s*-\s*/i, "")
+        .trim();
+}
 
 // Extract only the course code prefix (e.g. "CS 3305-01" from "Course Home - CS 3305-01 - AY2026-T5")
 function getCourseCode(course) {
@@ -509,8 +517,8 @@ ${assignBlock}`;
 // ─────────────────────────────────────────────────
 async function uploadToObsidian(course, results, unitDetails, apiKey) {
     const dateStr = new Date().toISOString().split("T")[0];
-    const courseCode = getCourseCode(course);
-    const safeName = courseCode.replace(/[/\\?%*:|"<>]/g, "-").trim();
+    const cleanedCourse = getCleanedCourseName(course);
+    const safeName = cleanedCourse.replace(/[/\\?%*:|"<>]/g, "-").trim();
 
     let md = `---\ncourse: "${course}"\nsynced: "${dateStr}"\n---\n\n`;
     md += `# ${course}\n\n`;
@@ -521,9 +529,11 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     md += `| :--- | :--- | :--- | :--- |\n`;
     results.forEach((item) => {
         if (item.type !== "Resource") {
+            const hasDeadline = item.deadline && item.deadline !== "N/A";
             const noteName = obsidianNoteName(course, item.title);
+            const taskCell = hasDeadline ? `[[${noteName}]]` : item.title;
             const anchor = getHeaderAnchor(item.unitTime);
-            md += `| [${item.unitTime}](#${anchor}) | ${item.type} | [[${noteName}]] | ${item.deadline} |\n`;
+            md += `| [${item.unitTime}](#${anchor}) | ${item.type} | ${taskCell} | ${item.deadline} |\n`;
         }
     });
 
@@ -556,24 +566,27 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         md += `### 🔗 本週核心行動清單\n`;
         if (data.readings.length > 0) {
             for (const r of data.readings) {
+                const hasDeadline = r.deadline && r.deadline !== "N/A";
                 const noteName = obsidianNoteName(course, r.title);
-                md += `* [ ] **Reading**: [[${noteName}]]\n`;
+                md += `* [ ] **Reading**: ${hasDeadline ? `[[${noteName}]]` : r.title}\n`;
             }
         } else {
             md += `* [ ] **Reading**: 閱讀本週教材\n`;
         }
         if (data.discussions.length > 0) {
             for (const d of data.discussions) {
+                const hasDeadline = d.deadline && d.deadline !== "N/A";
                 const noteName = obsidianNoteName(course, d.title);
-                md += `* [ ] **Discussion**: [[${noteName}]]${d.deadline !== "N/A" ? ` — 📅 ${d.deadline}` : ""}\n`;
+                md += `* [ ] **Discussion**: ${hasDeadline ? `[[${noteName}]] — 📅 ${d.deadline}` : d.title}\n`;
             }
         } else {
             md += `* [ ] **Discussion**: 參與討論區互動\n`;
         }
         if (data.assignments.length > 0) {
             for (const a of data.assignments) {
+                const hasDeadline = a.deadline && a.deadline !== "N/A";
                 const noteName = obsidianNoteName(course, a.title);
-                md += `* [ ] **Assignment**: [[${noteName}]]${a.deadline !== "N/A" ? ` — 📅 ${a.deadline}` : ""}\n`;
+                md += `* [ ] **Assignment**: ${hasDeadline ? `[[${noteName}]] — 📅 ${a.deadline}` : a.title}\n`;
             }
         } else {
             md += `* [ ] **Assignment**: 完成本週指定作業\n`;
@@ -601,7 +614,11 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
                 const cleaned = promptText.replace(/\n{3,}/g, "\n\n").substring(0, 3000);
                 return `  • ${d.title}\n    ${cleaned}`;
             }).join("\n");
-        } else {
+        }
+        if (meta.extractedDiscussionPrompt) {
+            discussBlock = (discussBlock ? discussBlock + "\n\n" : "") + `  [Extracted Prompts from Guide]:\n    ${meta.extractedDiscussionPrompt.trim().replace(/\n/g, "\n    ")}`;
+        }
+        if (!discussBlock) {
             discussBlock = "  (none this unit)";
         }
 
@@ -613,7 +630,11 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
                 const cleaned = instrText.replace(/\n{3,}/g, "\n\n").substring(0, 3000);
                 return `  • ${a.title}\n    ${cleaned}`;
             }).join("\n");
-        } else {
+        }
+        if (meta.extractedAssignmentInstructions) {
+            assignBlock = (assignBlock ? assignBlock + "\n\n" : "") + `  [Extracted Instructions from Guide]:\n    ${meta.extractedAssignmentInstructions.trim().replace(/\n/g, "\n    ")}`;
+        }
+        if (!assignBlock) {
             assignBlock = "  (none this unit)";
         }
 
