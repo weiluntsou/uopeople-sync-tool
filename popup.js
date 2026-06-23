@@ -455,12 +455,13 @@ function obsidianNoteName(course, title) {
 }
 
 // Generate a clean Markdown heading anchor link (compatible with Obsidian / standard markdown)
+// Obsidian strips emoji from headings when building anchors, so we must NOT include emoji in the anchor.
+// Rule: lowercase, keep only alphanumeric + spaces + hyphens, replace spaces with hyphens.
 function getHeaderAnchor(unitName) {
-    const clean = unitName.toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, "")
+    return unitName.toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, "")   // strip emoji & special chars
         .trim()
         .replace(/\s+/g, "-");
-    return `📘-${clean}`;
 }
 
 // Prefix every line with "> " for Obsidian callout body
@@ -509,7 +510,9 @@ function cleanTopics(topics) {
         /^view the/i,
         /^read chapter/i,
         /^section \d+\.\d+/i,
-        /\.?\s+[A-Z][a-z]+,\s+[A-Z]\./
+        /\.?\s+[A-Z][a-z]+,\s+[A-Z]\./,
+        /^in [A-Z]/i,                    // "In this unit...", "In addition..."
+        /^select computer science/i      // platform nav noise
     ];
     return topics.filter(t => {
         const trimmed = t.trim();
@@ -627,53 +630,139 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         md += `\n---\n\n## 📘 ${unit}\n`;
         md += `> 📅 **Deadline:** ${deadlineStr} | ⏳ 狀態：未開始\n\n`;
 
-        // ── Action Checklist ──
+        // ── Step 2: Dynamic Action Checklist ──
         md += `### 🔗 本週核心行動清單\n`;
-        md += `* [ ] **Reading**: 閱讀本週教材\n`;
-        md += `* [ ] **Discussion**: 參與討論區互動\n`;
-        md += `* [ ] **Assignment**: 完成本週指定作業\n\n`;
-
-        // ── Learning Rhythm Guide ──
-        const isExamUnit = unit.toLowerCase().includes("unit 9") || unit.includes("9") || unit.toLowerCase().includes("final exam");
-        if (isExamUnit) {
-            md += `> 💡 **本週學習節奏建議（48hr 攻略）**\n`;
-            md += `> D1：回顧所有單元心智模型 → D2：跑模擬題自測 → 提交前確認監考設備\n\n`;
+        // Readings
+        if (data.readings.length > 0) {
+            data.readings.forEach(r => {
+                const link = r.url ? `[${r.title}](${r.url})` : r.title;
+                md += `* [ ] 📖 ${link} — 本週必讀，完成後才能做作業\n`;
+            });
         } else {
-            md += `> 💡 **本週學習節奏建議（48hr 攻略）**\n`;
-            md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，邊聽邊在 Obsidian 畫出 3 個核心框架的節點關係。\n`;
-            md += `> 2. **D1 下午｜挖掘認知深度** — 跑 🤖 Chat Prompt 的前兩段，把「爭議地圖」記錄在同一份筆記裡。\n`;
-            md += `> 3. **D2 上午｜目標對齊** — 用 Chat Prompt 的第三段跑學習目標檢核，對每條 outcome 自問自答一次。\n`;
-            md += `> 4. **D2 下午｜作業執行** — 把作業題目貼入 Chat Prompt 第四段，依執行藍圖完成並用自我審核清單把關後提交。\n\n`;
+            md += `* [ ] ~~📖 無閱讀作業本週~~\n`;
+        }
+        // Discussions
+        if (data.discussions.length > 0) {
+            data.discussions.forEach(d => {
+                const wikiName = obsidianNoteName(course, d.title);
+                const dl = (d.deadline && d.deadline !== "N/A") ? ` — 📅 ${d.deadline}` : "";
+                md += `* [ ] 💬 [[${wikiName}]]${dl}\n`;
+            });
+        } else {
+            md += `* [ ] ~~💬 無討論作業本週~~\n`;
+        }
+        // Assignments (incl. graded quiz)
+        if (data.assignments.length > 0) {
+            data.assignments.forEach(a => {
+                const wikiName = obsidianNoteName(course, a.title);
+                const dl = (a.deadline && a.deadline !== "N/A") ? ` — 📅 ${a.deadline}` : "";
+                const isQuiz = a.title.toLowerCase().includes("quiz");
+                const icon = isQuiz ? "🧪" : "✍️";
+                md += `* [ ] ${icon} [[${wikiName}]]${dl}\n`;
+            });
+        } else {
+            md += `* [ ] ~~✍️ 無作業本週~~\n`;
+        }
+        // Self-quiz (from resources)
+        const selfQuizItems = data.resources.filter(r => r.title.toLowerCase().includes("self-quiz") || r.title.toLowerCase().includes("self quiz"));
+        selfQuizItems.forEach(sq => {
+            const link = sq.url ? `[${sq.title}](${sq.url})` : sq.title;
+            md += `* [ ] 🧪 ${link} — 自我測驗（不計分）\n`;
+        });
+        md += `\n`;
+
+        // ── Step 3 & 6: Dynamic Learning Rhythm Guide ──
+        const isExamUnit = unit.toLowerCase().includes("unit 9") ||
+            /\bunit\s*9\b/i.test(unit) ||
+            unit.toLowerCase().includes("final exam");
+        const hasDiscussion = data.discussions.length > 0;
+        const hasAssignment = data.assignments.length > 0;
+        const hasGradedQuiz = data.assignments.some(a => a.title.toLowerCase().includes("quiz"));
+        const hasSelfQuiz = selfQuizItems.length > 0;
+
+        md += `> 💡 **本週學習節奏建議（48hr 攻略）**\n`;
+        if (isExamUnit) {
+            md += `> 🏁 **考前衝刺模式**\n`;
+            md += `> D1 上午：回顧全課程心智模型地圖 → D1 下午：跑 🎧 考試版 Audio Prompt 整理高頻考點\n`;
+            md += `> D2 上午：用 🤖 考試版 Chat Prompt 跑模擬題自測 → D2 下午：確認監考設備，最後過一遍錯題清單\n\n`;
+        } else if (hasDiscussion && hasAssignment) {
+            md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，邊聽邊在 Obsidian 畫出核心框架。\n`;
+            md += `> 2. **D1 下午｜挖掘認知深度** — 跑 🤖 Chat Prompt 前兩段，把「爭議地圖」存入筆記。\n`;
+            md += `> 3. **D2 上午｜撰寫討論帖** — 參考 Discussion Prompt，完成初稿並回覆同學至少 1 則。\n`;
+            md += `> 4. **D2 下午｜執行作業** — 貼入 Chat Prompt 第四段，依藍圖完成並用自我審核清單把關後提交。\n\n`;
+        } else if (hasAssignment && !hasDiscussion) {
+            md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，建立本週核心框架。\n`;
+            md += `> 2. **D1 下午｜目標對齊** — 跑 🤖 Chat Prompt 前三段，對每條 Learning Outcome 自問自答。\n`;
+            md += `> 3. **D2 整天｜作業衝刺** — 貼入 Chat Prompt 第四段，依藍圖完成並自我審核後提交。\n\n`;
+        } else if (hasDiscussion && !hasAssignment) {
+            md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，理解本週核心概念。\n`;
+            md += `> 2. **D1 下午｜草稿討論帖** — 依 Discussion Prompt 撰寫初稿，確認論點完整。\n`;
+            md += `> 3. **D2 上午｜潤稿發文** — 修改語氣與引用格式，發文後回覆至少 1 位同學。\n\n`;
+        } else if (hasGradedQuiz) {
+            md += `> 1. **D1｜讀材 + 建立框架** — 閱讀教材，跑 🎧 Audio Prompt 整理重點概念。\n`;
+            md += `> 2. **D2 上午｜模擬練習** — 用 🤖 Chat Prompt 跑練習題，找出自己的弱點。\n`;
+            md += `> 3. **D2 下午｜正式作答** — 確認時間、環境後進行 Graded Quiz。\n\n`;
+        } else if (hasSelfQuiz) {
+            md += `> 1. **D1｜讀材吸收** — 閱讀本週教材，邊讀邊記重點。\n`;
+            md += `> 2. **D2｜自我測驗驗收** — 完成 Self-Quiz，對錯題加強複習，整理到 Obsidian PKM。\n\n`;
+        } else {
+            md += `> 輕量週：D1 閱讀材料吸收 → D2 整理 PKM 筆記，建立跨單元連結。\n\n`;
         }
 
-        // ── Foldable Audio Prompt Callout ──
+        // ── Step 6: Foldable Audio Prompt Callout (Exam vs Normal) ──
         md += `> [!🎧]- 點擊展開：生成 Podcast 的 Audio Prompt (供聆聽吸收)\n`;
         md += `> Copy the following prompt into NotebookLM's Audio Overview generation box:\n`;
         md += `> \n`;
-        md += `> Generate an in-depth, engaging podcast episode for: ${unit}\n`;
-        md += `> \n`;
-        md += `> You are two expert hosts — one is a senior practitioner in the field,\n`;
-        md += `> the other is a sharp academic researcher. Your conversation must cover:\n`;
-        md += `> \n`;
-        md += `> PART 1 — Mental Model Sprint (心智模型建立)\n`;
-        md += `>   "What are the TOP 3-5 thinking frameworks that experts in this field\n`;
-        md += `>    universally agree on? Explain each one as if teaching a smart\n`;
-        md += `>    newcomer — no jargon without explanation."\n`;
-        md += `> \n`;
-        md += `> PART 2 — The Battlefield (認知深度挖掘)\n`;
-        md += `>   "Where do the experts fundamentally disagree? Pick the 2-3 most\n`;
-        md += `>    important unsettled debates in this topic. Present both sides with\n`;
-        md += `>    their evidence and the fatal flaw of each."\n`;
-        md += `> \n`;
-        md += `> PART 3 — Real-World Deployment (實戰應用)\n`;
-        md += `>   "If a developer/student had to USE this knowledge tomorrow on a\n`;
-        md += `>    real project, what would be the single most important thing to\n`;
-        md += `>    get right? What's the classic beginner trap?"\n`;
-        md += `> \n`;
-        md += `> Rules:\n`;
-        md += `> - Never read URLs, code syntax, or raw citations aloud.\n`;
-        md += `> - Focus on architectural thinking and trade-offs, not trivia.\n`;
-        md += `> - End with one "cliffhanger" question that connects to next week's topic.\n\n`;
+        if (isExamUnit) {
+            md += `> Generate a comprehensive FINAL EXAM REVIEW podcast for: ${unit}\n`;
+            md += `> \n`;
+            md += `> You are two expert hosts doing a "Before the Exam" intensive review session.\n`;
+            md += `> Your conversation must cover:\n`;
+            md += `> \n`;
+            md += `> PART 1 — The Big Picture Map\n`;
+            md += `>   "Draw the conceptual map of the ENTIRE course in 5 minutes.\n`;
+            md += `>    What are the 5-7 pillars that every exam question will touch?\n`;
+            md += `>    How do these pillars connect to each other?"\n`;
+            md += `> \n`;
+            md += `> PART 2 — High-Yield Trap Detector\n`;
+            md += `>   "What are the TOP 5 topics where students lose the most points?\n`;
+            md += `>    For each: explain the concept clearly, then explain the typical mistake\n`;
+            md += `>    and how to avoid it."\n`;
+            md += `> \n`;
+            md += `> PART 3 — Speed Round Q&A\n`;
+            md += `>   "Fire 10 rapid-fire questions that could appear on the final exam.\n`;
+            md += `>    After each, give a crisp model answer in 2-3 sentences."\n`;
+            md += `> \n`;
+            md += `> Rules:\n`;
+            md += `> - Focus on synthesis and cross-topic connections, not isolated details.\n`;
+            md += `> - Highlight which topics carry the most weight.\n`;
+            md += `> - End with a motivational 30-second closing statement.\n\n`;
+        } else {
+            md += `> Generate an in-depth, engaging podcast episode for: ${unit}\n`;
+            md += `> \n`;
+            md += `> You are two expert hosts — one is a senior practitioner in the field,\n`;
+            md += `> the other is a sharp academic researcher. Your conversation must cover:\n`;
+            md += `> \n`;
+            md += `> PART 1 — Mental Model Sprint (心智模型建立)\n`;
+            md += `>   "What are the TOP 3-5 thinking frameworks that experts in this field\n`;
+            md += `>    universally agree on? Explain each one as if teaching a smart\n`;
+            md += `>    newcomer — no jargon without explanation."\n`;
+            md += `> \n`;
+            md += `> PART 2 — The Battlefield (認知深度挖掘)\n`;
+            md += `>   "Where do the experts fundamentally disagree? Pick the 2-3 most\n`;
+            md += `>    important unsettled debates in this topic. Present both sides with\n`;
+            md += `>    their evidence and the fatal flaw of each."\n`;
+            md += `> \n`;
+            md += `> PART 3 — Real-World Deployment (實戰應用)\n`;
+            md += `>   "If a developer/student had to USE this knowledge tomorrow on a\n`;
+            md += `>    real project, what would be the single most important thing to\n`;
+            md += `>    get right? What's the classic beginner trap?"\n`;
+            md += `> \n`;
+            md += `> Rules:\n`;
+            md += `> - Never read URLs, code syntax, or raw citations aloud.\n`;
+            md += `> - Focus on architectural thinking and trade-offs, not trivia.\n`;
+            md += `> - End with one "cliffhanger" question that connects to next week's topic.\n\n`;
+        }
 
         // ── Prepare Prompt Blocks ──
         const cleanedTopicsList = cleanTopics(topics);
@@ -731,67 +820,116 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
             }
         }
 
-        // ── Foldable Chat Prompt Callout ──
-        let chatPrompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-        chatPrompt += `📌 UNIVERSAL CHAT PROMPT FOR ASSIGNMENT & GOALS: ${unit}\n`;
-        chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-        chatPrompt += `\n`;
-        chatPrompt += `Task: You are an elite professor teaching "${cleanedCourse}". Generate an EXHAUSTIVE, step-by-step Study & Assignment Guide based on the provided materials.\n`;
-        chatPrompt += `\n`;
+        // ── Step 4 & 6: Foldable Chat Prompt Callout ──
+        const assignmentUrlForPrompt = assignmentActivity ? (assignmentActivity.url || "") : "";
+        let chatPrompt = "";
+
+        // Step 4: Pre-use startup block (shown for ALL units)
+        chatPrompt += `📋 使用前請先完成（2 分鐘準備）\n`;
         chatPrompt += `───────────────────────────────────────\n`;
-        chatPrompt += `Dynamic Role Adaptation (自適應學科引擎):\n`;
+        if (isExamUnit) {
+            chatPrompt += `✅ Step 1：確認你已完成所有單元的 Self-Quiz 與 Discussion 回覆\n`;
+            chatPrompt += `✅ Step 2：打開本課程所有 Unit 的 Obsidian 筆記作為參考\n`;
+            chatPrompt += `✅ Step 3：把下方整段 Prompt 複製貼入 Gemini / Claude / GPT-4o\n`;
+        } else {
+            chatPrompt += `✅ Step 1：確認你已閱讀本週 Learning Guide（不需全讀，掃 outline 即可）\n`;
+            chatPrompt += `✅ Step 2：確認作業說明頁已開啟\n`;
+            chatPrompt += `✅ Step 3：把下方整段 Prompt 複製貼入 Gemini / Claude / GPT-4o\n`;
+            chatPrompt += `⚠️  若 Assignment 欄位為空：先到作業頁面複製題目，手動補在 [Assignment Details] 處\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `作業頁面 URL：${assignmentUrlForPrompt || "(本週無作業)"}\n`;
+        }
         chatPrompt += `───────────────────────────────────────\n`;
-        chatPrompt += `Analyze the "${cleanedCourse}" and the topics. Auto-adjust your pedagogical approach:\n`;
-        chatPrompt += `- IF Computer Science/Programming: Focus on System Architecture, logic flow, pseudocode, edge cases, and debugging strategies.\n`;
-        chatPrompt += `- IF Math/Statistics: Focus on formulas, assumptions, hypothesis testing, and step-by-step calculation logic (without giving final answers).\n`;
-        chatPrompt += `- IF Humanities/Social Sciences: Focus on theoretical frameworks, historical context, debate mapping, and thesis statement formulation.\n`;
         chatPrompt += `\n`;
-        chatPrompt += `Structure Requirements:\n`;
-        chatPrompt += `───────────────────────────────────────\n`;
-        chatPrompt += `\n`;
-        chatPrompt += `  🗺️ 1. Expert Mental Model Map（專家心智模型）\n`;
-        chatPrompt += `     - 列出本週主題中，業界專家公認最重要的 3 個核心思考框架。\n`;
-        chatPrompt += `     - 用「第一性原理」解釋每個框架：它解決什麼問題？\n`;
-        chatPrompt += `       沒有它的話，初學者會在哪裡卡住？\n`;
-        chatPrompt += `     - 將這 3 個框架整理成一張可存入 Obsidian 的概念地圖結構\n`;
-        chatPrompt += `       （用縮排的 bullet 呈現節點與連結關係）。\n`;
-        chatPrompt += `\n`;
-        chatPrompt += `  ⚔️ 2. The Battlefield — Cognitive Depth（認知深度：學科爭議地圖）\n`;
-        chatPrompt += `     - 找出本週內容中，專家之間存在根本分歧的 2 個核心議題。\n`;
-        chatPrompt += `     - 對每個議題：說明正反兩方的論點與證據，\n`;
-        chatPrompt += `       以及各自的「致命缺陷」是什麼。\n`;
-        chatPrompt += `     - 明確標示哪些是「已成定論」，哪些是「仍在爭議中」。\n`;
-        chatPrompt += `\n`;
-        chatPrompt += `  🎯 3. Outcome Mastery Checklist（學習目標達成檢核）\n`;
-        chatPrompt += `     - 逐條對照下方提供的 [Learning Outcomes]。\n`;
-        chatPrompt += `     - 為每條 outcome 生成：\n`;
-        chatPrompt += `       a) 一個可以當場自測的「主動回憶問題」\n`;
-        chatPrompt += `       b) 「達標的具體證明」：我能做到什麼，才算真的會了？\n`;
-        chatPrompt += `       c) 「最常見的錯誤認知」：學生以為自己懂但其實沒懂的地方。\n`;
-        chatPrompt += `\n`;
-        chatPrompt += `  📝 4. Assignment Execution Blueprint（作業專案執行藍圖）\n`;
-        chatPrompt += `     - 將本週作業視為一個「軟體開發小專案」來規劃：\n`;
-        chatPrompt += `       a) 專案目標：用一句話說清楚這份作業要證明什麼能力。\n`;
-        chatPrompt += `       b) 執行階段拆解：列出完成作業的邏輯步驟\n`;
-        chatPrompt += `          （CS 類：file structure + logic flow；\n`;
-        chatPrompt += `           人文類：論點架構 + 段落邏輯）。\n`;
-        chatPrompt += `       c) 地雷清單：列出 3 個這份作業最常見的扣分陷阱。\n`;
-        chatPrompt += `       d) 提交前自我審核：給我 5 個 yes/no 問題，\n`;
-        chatPrompt += `          全部回答「是」才能送出。\n`;
-        chatPrompt += `     - ⚠️ FAIL-SAFE：若 [Assignment Details] 為空或只有連結，\n`;
-        chatPrompt += `       不要假設題目內容。改為輸出：\n`;
-        chatPrompt += `       「請將作業題目貼於此處，我將為你生成對應的執行藍圖。\n`;
-        const assignmentUrlVal = assignmentActivity ? (assignmentActivity.url || "") : "";
-        chatPrompt += `         作業頁面 URL：${assignmentUrlVal}」\n`;
-        chatPrompt += `\n`;
-        chatPrompt += `───────────────────────────────────────\n`;
-        chatPrompt += `Input Data for this Unit:\n`;
-        chatPrompt += `───────────────────────────────────────\n`;
-        chatPrompt += `Course Name: ${cleanedCourse}\n`;
-        chatPrompt += `Topics: \n${topicsBlock}\n`;
-        chatPrompt += `Learning Outcomes: \n${outcomesBlock}\n`;
-        chatPrompt += `Assignment Details & Rubrics: \n${assignBlock}\n`;
-        chatPrompt += `Discussion Prompts: \n${discussBlock}`;
+
+        // Step 6: Exam vs Normal chat prompt body
+        if (isExamUnit) {
+            chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            chatPrompt += `📌 FINAL EXAM PREP PROMPT FOR: ${unit}\n`;
+            chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `You are an elite exam coach for "${cleanedCourse}". Generate a comprehensive Final Exam Preparation Package:\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  🗺️ 1. Course-Wide Knowledge Map\n`;
+            chatPrompt += `     - Synthesize ALL units into one conceptual framework.\n`;
+            chatPrompt += `     - Identify the top 5-7 cross-cutting themes connecting different units.\n`;
+            chatPrompt += `     - For each theme: which units contribute? What's the exam-ready definition?\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  🎯 2. High-Yield Topic Analysis\n`;
+            chatPrompt += `     - Identify the 5 topics MOST LIKELY to appear on the final exam.\n`;
+            chatPrompt += `     - For each: core concept, common student misconception, model answer framework.\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  📝 3. Practice Question Set\n`;
+            chatPrompt += `     - Generate 5 practice exam questions at varying difficulty levels.\n`;
+            chatPrompt += `     - For each: provide a scoring rubric and a model outline answer.\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  ✅ 4. Final Checklist\n`;
+            chatPrompt += `     - Create a 10-point pre-exam checklist the student should verify before submitting.\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `───────────────────────────────────────\n`;
+            chatPrompt += `Course: ${cleanedCourse}\n`;
+        } else {
+            chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            chatPrompt += `📌 UNIVERSAL CHAT PROMPT FOR ASSIGNMENT & GOALS: ${unit}\n`;
+            chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `Task: You are an elite professor teaching "${cleanedCourse}". Generate an EXHAUSTIVE, step-by-step Study & Assignment Guide based on the provided materials.\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `───────────────────────────────────────\n`;
+            chatPrompt += `Dynamic Role Adaptation (自適應學科引擎):\n`;
+            chatPrompt += `───────────────────────────────────────\n`;
+            chatPrompt += `Analyze the "${cleanedCourse}" and the topics. Auto-adjust your pedagogical approach:\n`;
+            chatPrompt += `- IF Computer Science/Programming: Focus on System Architecture, logic flow, pseudocode, edge cases, and debugging strategies.\n`;
+            chatPrompt += `- IF Math/Statistics: Focus on formulas, assumptions, hypothesis testing, and step-by-step calculation logic (without giving final answers).\n`;
+            chatPrompt += `- IF Humanities/Social Sciences: Focus on theoretical frameworks, historical context, debate mapping, and thesis statement formulation.\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `Structure Requirements:\n`;
+            chatPrompt += `───────────────────────────────────────\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  🗺️ 1. Expert Mental Model Map（專家心智模型）\n`;
+            chatPrompt += `     - 列出本週主題中，業界專家公認最重要的 3 個核心思考框架。\n`;
+            chatPrompt += `     - 用「第一性原理」解釋每個框架：它解決什麼問題？\n`;
+            chatPrompt += `       沒有它的話，初學者會在哪裡卡住？\n`;
+            chatPrompt += `     - 將這 3 個框架整理成一張可存入 Obsidian 的概念地圖結構\n`;
+            chatPrompt += `       （用縮排的 bullet 呈現節點與連結關係）。\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  ⚔️ 2. The Battlefield — Cognitive Depth（認知深度：學科爭議地圖）\n`;
+            chatPrompt += `     - 找出本週內容中，專家之間存在根本分歧的 2 個核心議題。\n`;
+            chatPrompt += `     - 對每個議題：說明正反兩方的論點與證據，\n`;
+            chatPrompt += `       以及各自的「致命缺陷」是什麼。\n`;
+            chatPrompt += `     - 明確標示哪些是「已成定論」，哪些是「仍在爭議中」。\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  🎯 3. Outcome Mastery Checklist（學習目標達成檢核）\n`;
+            chatPrompt += `     - 逐條對照下方提供的 [Learning Outcomes]。\n`;
+            chatPrompt += `     - 為每條 outcome 生成：\n`;
+            chatPrompt += `       a) 一個可以當場自測的「主動回憶問題」\n`;
+            chatPrompt += `       b) 「達標的具體證明」：我能做到什麼，才算真的會了？\n`;
+            chatPrompt += `       c) 「最常見的錯誤認知」：學生以為自己懂但其實沒懂的地方。\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `  📝 4. Assignment Execution Blueprint（作業專案執行藍圖）\n`;
+            chatPrompt += `     - 將本週作業視為一個「軟體開發小專案」來規劃：\n`;
+            chatPrompt += `       a) 專案目標：用一句話說清楚這份作業要證明什麼能力。\n`;
+            chatPrompt += `       b) 執行階段拆解：列出完成作業的邏輯步驟\n`;
+            chatPrompt += `          （CS 類：file structure + logic flow；\n`;
+            chatPrompt += `           人文類：論點架構 + 段落邏輯）。\n`;
+            chatPrompt += `       c) 地雷清單：列出 3 個這份作業最常見的扣分陷阱。\n`;
+            chatPrompt += `       d) 提交前自我審核：給我 5 個 yes/no 問題，\n`;
+            chatPrompt += `          全部回答「是」才能送出。\n`;
+            chatPrompt += `     - ⚠️ FAIL-SAFE：若 [Assignment Details] 為空或只有連結，\n`;
+            chatPrompt += `       不要假設題目內容。改為輸出：\n`;
+            chatPrompt += `       「請將作業題目貼於此處，我將為你生成對應的執行藍圖。\n`;
+            chatPrompt += `         作業頁面 URL：${assignmentUrlForPrompt}」\n`;
+            chatPrompt += `\n`;
+            chatPrompt += `───────────────────────────────────────\n`;
+            chatPrompt += `Input Data for this Unit:\n`;
+            chatPrompt += `───────────────────────────────────────\n`;
+            chatPrompt += `Course Name: ${cleanedCourse}\n`;
+            chatPrompt += `Topics: \n${topicsBlock}\n`;
+            chatPrompt += `Learning Outcomes: \n${outcomesBlock}\n`;
+            chatPrompt += `Assignment Details & Rubrics: \n${assignBlock}\n`;
+            chatPrompt += `Discussion Prompts: \n${discussBlock}`;
+        }
+
 
         md += `> [!🤖]- 點擊展開：生成作業破關攻略的 Chat Prompt (供實作檢核)\n`;
         md += `> Copy the following prompt into NotebookLM's Text Chat box:\n`;
