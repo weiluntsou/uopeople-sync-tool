@@ -425,6 +425,9 @@ async function fetchReadingPage(bookUrl) {
         const res = await fetch(bookUrl, { credentials: "include" });
         if (!res.ok) return `❌ 無法存取頁面 (HTTP ${res.status})`;
         const html = await res.text();
+        if (html.trimStart().startsWith('%PDF')) {
+            return "%PDF [binary data skipped]";
+        }
         const doc = new DOMParser().parseFromString(html, "text/html");
 
         const tocSelectors = [
@@ -625,6 +628,9 @@ async function fetchDeepDetail(url, title) {
         const res = await fetch(url, { credentials: "include" });
         if (!res.ok) return { detail: `❌ 無法存取 (HTTP ${res.status})`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", rubricText: null };
         const html = await res.text();
+        if (html.trimStart().startsWith('%PDF')) {
+            return { detail: "%PDF [binary data skipped]", deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", rubricText: null };
+        }
         const doc = new DOMParser().parseFromString(html, "text/html");
 
         // ── 解析 Due Date ──
@@ -808,36 +814,40 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                     const fileRes = await fetch(fileUrl, { credentials: "include" });
                     if (fileRes.ok) {
                         const html = await fileRes.text();
-                        const doc = new DOMParser().parseFromString(html, "text/html");
-                        
-                        const seenHrefs = new Set();
-                        const entries = [];
-                        const fallbackText = extractFromDoc(doc, fileUrl, entries, seenHrefs);
-                        
-                        if (entries.length > 0) {
-                            detail = `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
-                        } else if (fallbackText && fallbackText.length > 20) {
-                            detail = `#### 📖 Reading Assignment Text\n${fallbackText}`;
-                        }
-                        
-                        const overviewMeta = {
-                            topics: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /topics?/i), false),
-                            outcomes: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true)
-                        };
-                        topics = overviewMeta.topics;
-                        outcomes = overviewMeta.outcomes;
+                        if (html.trimStart().startsWith('%PDF')) {
+                            detail = "%PDF [binary data skipped]";
+                        } else {
+                            const doc = new DOMParser().parseFromString(html, "text/html");
+                            
+                            const seenHrefs = new Set();
+                            const entries = [];
+                            const fallbackText = extractFromDoc(doc, fileUrl, entries, seenHrefs);
+                            
+                            if (entries.length > 0) {
+                                detail = `#### 📚 Reading Assignment List\n${entries.join("\n")}`;
+                            } else if (fallbackText && fallbackText.length > 20) {
+                                detail = `#### 📖 Reading Assignment Text\n${fallbackText}`;
+                            }
+                            
+                            const overviewMeta = {
+                                topics: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /topics?/i), false),
+                                outcomes: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true)
+                            };
+                            topics = overviewMeta.topics;
+                            outcomes = overviewMeta.outcomes;
 
-                        const extDiscussion = extractSectionByHeading(doc.body, /discussion\s+(?:assignment|forum|prompt)/i);
-                        const extWritten = extractSectionByHeading(doc.body, /written\s+assignment/i);
-                        const extJournal = extractSectionByHeading(doc.body, /learning\s+journal/i);
-                        const extProg = extractSectionByHeading(doc.body, /programming\s+assignment/i);
-                        const extPortfolio = extractSectionByHeading(doc.body, /portfolio\s+activity/i);
-                        
-                        if (extDiscussion) extractedDiscussionPrompt = extDiscussion;
-                        if (extWritten) extractedAssignmentInstructions += `\n[Written Assignment]\n${extWritten}`;
-                        if (extJournal) extractedAssignmentInstructions += `\n[Learning Journal]\n${extJournal}`;
-                        if (extProg) extractedAssignmentInstructions += `\n[Programming Assignment]\n${extProg}`;
-                        if (extPortfolio) extractedAssignmentInstructions += `\n[Portfolio Activity]\n${extPortfolio}`;
+                            const extDiscussion = extractSectionByHeading(doc.body, /discussion\s+(?:assignment|forum|prompt)/i);
+                            const extWritten = extractSectionByHeading(doc.body, /written\s+assignment/i);
+                            const extJournal = extractSectionByHeading(doc.body, /learning\s+journal/i);
+                            const extProg = extractSectionByHeading(doc.body, /programming\s+assignment/i);
+                            const extPortfolio = extractSectionByHeading(doc.body, /portfolio\s+activity/i);
+                            
+                            if (extDiscussion) extractedDiscussionPrompt = extDiscussion;
+                            if (extWritten) extractedAssignmentInstructions += `\n[Written Assignment]\n${extWritten}`;
+                            if (extJournal) extractedAssignmentInstructions += `\n[Learning Journal]\n${extJournal}`;
+                            if (extProg) extractedAssignmentInstructions += `\n[Programming Assignment]\n${extProg}`;
+                            if (extPortfolio) extractedAssignmentInstructions += `\n[Portfolio Activity]\n${extPortfolio}`;
+                        }
                     }
                 } catch (e) {
                     console.warn("Failed to fetch direct reading file:", e);
