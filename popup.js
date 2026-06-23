@@ -620,6 +620,28 @@ function getUnitSlug(unitName) {
     return "Unit0";
 }
 
+// Helper to condense topics list into a summary string
+function getCondensedTopicsSummary(cleanedTopicsList, readings) {
+    let list = [];
+    if (cleanedTopicsList && cleanedTopicsList.length > 0) {
+        list = cleanedTopicsList.slice(0, 4).map(t => t.trim());
+    } else if (readings && readings.length > 0) {
+        list = readings.slice(0, 3).map(r => {
+            return r.title
+                .replace(/^(Reading Assignment|Reading|Chapter\s+\d+|Ch\.\s*\d+)\s*[:-]?\s*/i, "")
+                .trim();
+        });
+    }
+    
+    if (list.length === 0) return "";
+    
+    const joined = list.join(", ");
+    if (joined.length > 120) {
+        return joined.substring(0, 117) + "...";
+    }
+    return joined;
+}
+
 // Helper to construct the content for the assignment draft note
 function buildAssignmentContent(assignmentActivity) {
     let md = `# ${assignmentActivity.title}\n`;
@@ -648,6 +670,11 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     const meta = (unitDetails || {})[unit] || {};
     const topics = meta.topics || [];
     const outcomes = meta.outcomes || [];
+    
+    const cleanedTopicsList = cleanTopics(topics);
+    const cleanedOutcomesList = cleanLearningOutcomes(outcomes);
+    const topicsSummary = getCondensedTopicsSummary(cleanedTopicsList, data.readings);
+    const subjectTitle = topicsSummary ? `${unit} (${topicsSummary})` : unit;
     
     // Find the earliest deadline in this unit
     const allDeadlines = [...data.readings, ...data.discussions, ...data.assignments]
@@ -750,8 +777,12 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     md += `> \n`;
     const cleanedCourse = getCleanedCourseName(course);
     if (isExamUnit) {
-        md += `> Generate a comprehensive FINAL EXAM REVIEW podcast for: ${unit}\n`;
+        md += `> Generate a comprehensive FINAL EXAM REVIEW podcast for: ${subjectTitle}\n`;
         md += `> \n`;
+        if (topicsSummary) {
+            md += `> Focus on synthesizing these key course concepts: ${topicsSummary}\n`;
+            md += `> \n`;
+        }
         md += `> You are two expert hosts doing a "Before the Exam" intensive review session.\n`;
         md += `> Your conversation must cover:\n`;
         md += `> \n`;
@@ -774,8 +805,12 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
         md += `> - Highlight which topics carry the most weight.\n`;
         md += `> - End with a motivational 30-second closing statement.\n\n`;
     } else {
-        md += `> Generate an in-depth, engaging podcast episode for: ${unit}\n`;
+        md += `> Generate an in-depth, engaging podcast episode for: ${subjectTitle}\n`;
         md += `> \n`;
+        if (topicsSummary) {
+            md += `> The hosts must focus their discussion on these core topics: ${topicsSummary}\n`;
+            md += `> \n`;
+        }
         md += `> You are two expert hosts — one is a senior practitioner in the field,\n`;
         md += `> the other is a sharp academic researcher. Your conversation must cover:\n`;
         md += `> \n`;
@@ -801,7 +836,6 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     }
 
     // ── Prepare Prompt Blocks ──
-    const cleanedTopicsList = cleanTopics(topics);
     let topicsBlock = "";
     if (cleanedTopicsList.length > 0) {
         topicsBlock = cleanedTopicsList.map(t => `  - ${t}`).join("\n");
@@ -810,7 +844,6 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
         topicsBlock = hints ? `  (derived from readings: ${hints})` : "  (not extracted — check Learning Guide Overview)";
     }
 
-    const cleanedOutcomesList = cleanLearningOutcomes(outcomes);
     let outcomesBlock = cleanedOutcomesList.length > 0
         ? cleanedOutcomesList.map(o => `  • ${o}`).join("\n")
         : "  (not extracted — check Learning Guide Overview)";
