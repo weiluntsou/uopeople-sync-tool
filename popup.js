@@ -675,6 +675,9 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     const cleanedOutcomesList = cleanLearningOutcomes(outcomes);
     const topicsSummary = getCondensedTopicsSummary(cleanedTopicsList, data.readings);
     const subjectTitle = topicsSummary ? `${unit} (${topicsSummary})` : unit;
+
+    const cleanedTopicsForPrompt = cleanedTopicsList.slice(0, 3).join(", ");
+    const firstTopicForPrompt = cleanedTopicsList.length > 0 ? cleanedTopicsList[0] : "[← 使用者手動選一條]";
     
     // Find the earliest deadline in this unit
     const allDeadlines = [...data.readings, ...data.discussions, ...data.assignments]
@@ -749,16 +752,16 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
         md += `> D2 上午：用 🤖 考試版 Chat Prompt 跑模擬題自測 → D2 下午：確認監考設備，最後過一遍錯題清單\n\n`;
     } else if (hasDiscussion && hasAssignment) {
         md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，邊聽邊在 Obsidian 畫出核心框架。\n`;
-        md += `> 2. **D1 下午｜挖掘認知深度** — 跑 🤖 Chat Prompt 前兩段，把「爭議地圖」存入筆記。\n`;
+        md += `> 2. **D1 下午｜深度理解 + 費曼檢核** — 跑 🤖 Chat Prompt 取得學習指南，輸出貼入 StudyGuide，接著跑 🔬 費曼四段 Prompt 確認理解，完成後撰寫討論帖初稿。\n`;
         md += `> 3. **D2 上午｜撰寫討論帖** — 參考 Discussion Prompt，完成初稿並回覆同學至少 1 則。\n`;
         md += `> 4. **D2 下午｜執行作業** — 貼入 Chat Prompt 第四段，依藍圖完成並用自我審核清單把關後提交。\n\n`;
     } else if (hasAssignment && !hasDiscussion) {
         md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，建立本週核心框架。\n`;
-        md += `> 2. **D1 下午｜目標對齊** — 跑 🤖 Chat Prompt 前三段，對每條 Learning Outcome 自問自答。\n`;
+        md += `> 2. **D1 下午｜深度理解 + 費曼檢核** — 跑 🤖 Chat Prompt 取得學習指南，輸出貼入 StudyGuide，接著跑 🔬 費曼四段 Prompt。⚠️ Prompt 3 的盲點清單就是你最需要補讀的部分。\n`;
         md += `> 3. **D2 整天｜作業衝刺** — 貼入 Chat Prompt 第四段，依藍圖完成並自我審核後提交。\n\n`;
     } else if (hasDiscussion && !hasAssignment) {
         md += `> 1. **D1 上午｜建立心智模型** — 先跑 🎧 Audio Prompt，理解本週核心概念。\n`;
-        md += `> 2. **D1 下午｜草稿討論帖** — 依 Discussion Prompt 撰寫初稿，確認論點完整。\n`;
+        md += `> 2. **D1 下午｜深度理解 + 費曼檢核** — 跑 🤖 Chat Prompt 取得學習指南，輸出貼入 StudyGuide，接著跑 🔬 費曼四段 Prompt 確認理解，完成後撰寫討論帖初稿。\n`;
         md += `> 3. **D2 上午｜潤稿發文** — 修改語氣與引用格式，發文後回覆至少 1 位同學。\n\n`;
     } else if (hasGradedQuiz) {
         md += `> 1. **D1｜讀材 + 建立框架** — 閱讀教材，跑 🎧 Audio Prompt 整理重點概念。\n`;
@@ -1016,6 +1019,67 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     md += `> \n`;
     md += calloutLines(chatPrompt) + "\n\n";
 
+    // 🔬 費曼檢核 callout
+    let feynmanPrompt = "";
+    feynmanPrompt += `⏱️ 建議時間：20 分鐘｜執行時機：D1 讀完教材後、提交作業前\n`;
+    feynmanPrompt += `使用方式：依序將四段 Prompt 貼入 Claude/Gemini，\n`;
+    feynmanPrompt += `          每段取得回應後，把你的答案記錄在下方空白區。\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `🗺️ Prompt 1｜概念地圖（2 分鐘）\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `貼入 AI：\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `我正在學習「${unit}」，主題包含：${cleanedTopicsForPrompt || "[← 請手動填入核心主題]"}\n`;
+    feynmanPrompt += `請列出這個主題中最關鍵的 5 個知識點，\n`;
+    feynmanPrompt += `並用一句話說明每個知識點「解決了什麼問題」。\n`;
+    feynmanPrompt += `只列清單，不要解釋，不要舉例。\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `🧒 Prompt 2｜12 歲測試（5 分鐘）\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `貼入 AI：\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `我現在要向一個 12 歲的孩子解釋「${unit}」的核心概念。\n`;
+    feynmanPrompt += `請扮演那個 12 歲的孩子，在我解釋之後，\n`;
+    feynmanPrompt += `用你聽不懂的地方來反問我問題。\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `我的解釋是：\n`;
+    feynmanPrompt += `[← 先自己寫 3–5 句話解釋本週核心概念，再貼入 AI]\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `🎯 Prompt 3｜空缺尋找（8 分鐘）\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `貼入 AI：\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `你是一位嚴格的「${unit}」專家教授。\n`;
+    feynmanPrompt += `我對這個主題的理解如下：\n`;
+    feynmanPrompt += `[← 把 Prompt 2 中你寫的解釋貼在這裡]\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `請你扮演嚴格導師，指出：\n`;
+    feynmanPrompt += `1. 我理解中最嚴重的 2 個錯誤或盲點\n`;
+    feynmanPrompt += `2. 我完全忽略但很重要的 1 個概念\n`;
+    feynmanPrompt += `3. 修正我理解的最短路徑（一句話指引）\n`;
+    feynmanPrompt += `不要給我鼓勵，只給我精準的診斷。\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `🔗 Prompt 4｜類比鎖定（5 分鐘）\n`;
+    feynmanPrompt += `───────────────────────────────────────\n`;
+    feynmanPrompt += `貼入 AI：\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `針對「${unit}」中以下這個概念：\n`;
+    feynmanPrompt += `${firstTopicForPrompt}\n`;
+    feynmanPrompt += `\n`;
+    feynmanPrompt += `請生成 2 個來自日常生活的類比，\n`;
+    feynmanPrompt += `要求：類比的對象必須是一般人都經歷過的事\n`;
+    feynmanPrompt += `      （例如：煮飯、排隊、手機充電）。\n`;
+    feynmanPrompt += `格式：\n`;
+    feynmanPrompt += `類比 1：[日常情境] → [對應到概念的哪個部分]\n`;
+    feynmanPrompt += `類比 2：[日常情境] → [對應到概念的哪個部分]`;
+
+    md += `> [!🔬]- 點擊展開：費曼主動檢索（理解確認用，讀完教材後執行）\n`;
+    md += calloutLines(feynmanPrompt) + "\n\n";
+
     // ── Foldable Scraped Content Callout ──
     let scrapedContentData = "";
     const allItems = [...data.readings, ...data.discussions, ...data.assignments, ...data.resources];
@@ -1079,6 +1143,17 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     md += `## 🧠 AI 學習指南輸出\n`;
     md += `> 使用說明：將 🤖 Chat Prompt 的 AI 回應貼在此處\n\n`;
     md += `[空白，等待貼入 AI 回應]\n\n`;
+
+    md += `---\n`;
+    md += `## 🔬 費曼檢核記錄\n\n`;
+    md += `### 我的核心概念解釋（Prompt 2 自填）\n`;
+    md += `[空白，使用者用自己的話寫 3–5 句]\n\n`;
+    md += `### AI 指出的盲點（Prompt 3 輸出）\n`;
+    md += `[空白，貼入 AI 回應]\n\n`;
+    md += `### 本週最強類比（Prompt 4 輸出，選 1 個）\n`;
+    md += `[空白，貼入最有共鳴的那個類比]\n\n`;
+    md += `---\n\n`;
+
     md += `## ✍️ 作業草稿區\n`;
     md += `> 使用說明：在此撰寫作業，完成後複製到 LMS 提交\n\n`;
     md += `[空白，等待撰寫]\n\n`;
