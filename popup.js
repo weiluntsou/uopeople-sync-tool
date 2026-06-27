@@ -673,6 +673,7 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
     
     const cleanedTopicsList = cleanTopics(topics);
     const cleanedOutcomesList = cleanLearningOutcomes(outcomes);
+    const reflectionQuestions = meta.reflectionQuestions || [];
     const topicsSummary = getCondensedTopicsSummary(cleanedTopicsList, data.readings);
     const subjectTitle = topicsSummary ? `${unit} (${topicsSummary})` : unit;
 
@@ -786,95 +787,202 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
         md += `> \n`;
     }
 
+    // ★ 分離真正的 ULOs vs 評量方式描述
+    const assessmentPatterns = [
+        /\bself[- ]?quiz\b/i,
+        /\bassignment\s+activity\b/i,
+        /\bwhere\s+you\s+will\b/i,
+        /\bthat\s+will\s+help\s+(you\s+)?to\b/i,
+        /\byou\s+will\s+(take|complete|submit|write|do|conduct)\b/i,
+        /\bgraded\s+quiz\b/i,
+        /\blearning\s+journal\b/i,
+        /\bportfolio\s+activity\b/i,
+        /\bdiscussion\s+(assignment|forum|post)\b/i,
+    ];
+    const trueULOs = cleanedOutcomesList.filter(o =>
+        !assessmentPatterns.some(p => p.test(o))
+    );
+    const assessmentContext = cleanedOutcomesList.filter(o =>
+        assessmentPatterns.some(p => p.test(o))
+    );
+
     md += `> Copy the following prompt into NotebookLM's Audio Overview generation box:\n`;
     md += `> \n`;
     const cleanedCourse = getCleanedCourseName(course);
     if (isExamUnit) {
-        md += `> Generate a comprehensive FINAL EXAM REVIEW podcast for: ${subjectTitle}\n`;
+        // ══════════════════════════════════════
+        // 考試版 Audio Prompt
+        // ══════════════════════════════════════
+        md += `> You are an expert AI tasked with generating a comprehensive FINAL EXAM\n`;
+        md += `> REVIEW podcast for: ${subjectTitle}\n`;
         md += `> \n`;
+
+        // ── COURSE CONTEXT ──
+        md += `> ### COURSE CONTEXT\n`;
         if (topicsSummary) {
             md += `> Focus on synthesizing these key course concepts: ${topicsSummary}\n`;
             md += `> \n`;
         }
-        // ★ 考試版也注入 Outcomes 作為交叉驗證參考
-        if (cleanedOutcomesList.length > 0) {
-            md += `> The following Learning Outcomes from the course should be used as\n`;
-            md += `> cross-reference checkpoints — make sure the review covers ALL of them:\n`;
-            md += `> \n`;
-            cleanedOutcomesList.forEach((outcome, i) => {
+        if (trueULOs.length > 0) {
+            md += `> **Learning Outcomes (cross-reference checkpoints):**\n`;
+            md += `> Make sure the review covers ALL of them:\n`;
+            trueULOs.forEach((outcome, i) => {
                 md += `> ${i + 1}. ${outcome}\n`;
             });
             md += `> \n`;
         }
+        if (assessmentContext.length > 0) {
+            md += `> **Student Assessments (for context only):**\n`;
+            assessmentContext.forEach(a => {
+                md += `> - ${a}\n`;
+            });
+            md += `> \n`;
+        }
+
+        // ── HOST PERSONAS ──
+        md += `> ### HOST PERSONAS\n`;
         md += `> You are two expert hosts doing a "Before the Exam" intensive review session.\n`;
-        md += `> Your conversation must cover:\n`;
+        md += `> - Host A (The Practitioner): Focuses on real-world application and "why this matters."\n`;
+        md += `> - Host B (The Academic): Focuses on theory, logic, and catching technical nuances.\n`;
         md += `> \n`;
-        md += `> PART 1 — The Big Picture Map\n`;
+
+        // ── EPISODE STRUCTURE ──
+        md += `> ### EPISODE STRUCTURE\n`;
+        md += `> \n`;
+        md += `> **PART 1 — The Big Picture Map**\n`;
         md += `>   "Draw the conceptual map of the ENTIRE course in 5 minutes.\n`;
         md += `>    What are the 5-7 pillars that every exam question will touch?\n`;
         md += `>    How do these pillars connect to each other?"\n`;
         md += `> \n`;
-        md += `> PART 2 — High-Yield Trap Detector\n`;
+        md += `> **PART 2 — High-Yield Trap Detector**\n`;
         md += `>   "What are the TOP 5 topics where students lose the most points?\n`;
         md += `>    For each: explain the concept clearly, then explain the typical mistake\n`;
         md += `>    and how to avoid it."\n`;
         md += `> \n`;
-        md += `> PART 3 — Speed Round Q&A\n`;
+        md += `> **PART 3 — Speed Round Q&A**\n`;
         md += `>   "Fire 10 rapid-fire questions that could appear on the final exam.\n`;
         md += `>    After each, give a crisp model answer in 2-3 sentences."\n`;
         md += `> \n`;
-        md += `> Rules:\n`;
+
+        // ── STRICT RULES ──
+        md += `> ### STRICT RULES\n`;
         md += `> - Focus on synthesis and cross-topic connections, not isolated details.\n`;
         md += `> - Highlight which topics carry the most weight.\n`;
+        md += `> - Never read URLs, code syntax, or raw citations aloud.\n`;
+        md += `> - Focus purely on teaching concepts. Do not explain how to use the course\n`;
+        md += `>   website or how to submit assignments.\n`;
         md += `> - End with a motivational 30-second closing statement.\n\n`;
     } else {
-        md += `> Generate an in-depth, engaging podcast episode for: ${subjectTitle}\n`;
+        // ══════════════════════════════════════
+        // 非考試版 Audio Prompt（模組化 Context / Instructions 分離）
+        // ══════════════════════════════════════
+        md += `> You are an expert AI tasked with generating an in-depth, engaging\n`;
+        md += `> educational podcast episode based on a specific course unit.\n`;
         md += `> \n`;
-        if (topicsSummary) {
-            md += `> The hosts must focus their discussion on these core topics: ${topicsSummary}\n`;
+
+        // ── COURSE CONTEXT ──
+        md += `> ### COURSE CONTEXT (${subjectTitle})\n`;
+
+        // Core Topics — 完整列表，不截斷
+        if (cleanedTopicsList.length > 0) {
+            md += `> **Core Topics:**\n`;
+            cleanedTopicsList.forEach((topic, i) => {
+                md += `> ${i + 1}. ${topic}\n`;
+            });
             md += `> \n`;
         }
-        // ★ 注入 Learning Outcomes — Podcast 的最大重點
-        if (cleanedOutcomesList.length > 0) {
-            md += `> CRITICAL — The following are the EXPLICIT Learning Outcomes from the\n`;
-            md += `> course Unit Overview. The ENTIRE podcast must be structured to ensure\n`;
-            md += `> the listener achieves EVERY one of these outcomes after listening:\n`;
-            md += `> \n`;
-            cleanedOutcomesList.forEach((outcome, i) => {
+
+        // Official Learning Outcomes (ULOs) — 只有真正的學習目標
+        if (trueULOs.length > 0) {
+            md += `> **Official Learning Outcomes (ULOs) — THESE ARE YOUR NORTH STAR:**\n`;
+            trueULOs.forEach((outcome, i) => {
                 md += `> ${i + 1}. ${outcome}\n`;
             });
             md += `> \n`;
         }
-        md += `> You are two expert hosts — one is a senior practitioner in the field,\n`;
-        md += `> the other is a sharp academic researcher. Your conversation must cover:\n`;
+
+        // Student Assessments — 標記為 "For context only"
+        if (assessmentContext.length > 0) {
+            md += `> **Student Assessments (For context only — students need to be able to do this):**\n`;
+            assessmentContext.forEach(a => {
+                md += `> - ${a}\n`;
+            });
+            md += `> \n`;
+        }
+
+        // Key Reflection Questions — 從 Unit Overview 提取的黃金素材
+        if (reflectionQuestions.length > 0) {
+            md += `> **Key Reflection Questions to explore:**\n`;
+            reflectionQuestions.forEach(q => {
+                md += `> - ${q}\n`;
+            });
+            md += `> \n`;
+        }
+
+        // ── HOST PERSONAS ──
+        md += `> ### HOST PERSONAS\n`;
+        md += `> You are two expert hosts:\n`;
+        md += `> - Host A (The Practitioner): A senior professional who applies these concepts\n`;
+        md += `>   in real-world scenarios. Focuses on "why this matters practically."\n`;
+        md += `> - Host B (The Academic): A sharp researcher who loves the theory, the logic,\n`;
+        md += `>   and catching technical nuances. Focuses on "how the engine works under the hood."\n`;
         md += `> \n`;
-        md += `> PART 1 — Learning Outcome Deep-Dive (學習目標逐條解析)\n`;
-        md += `>   "Go through EACH Learning Outcome listed above one by one.\n`;
-        md += `>    For each outcome: explain the core concept in plain language,\n`;
-        md += `>    give a concrete real-world example, and explain WHY this outcome\n`;
-        md += `>    matters in the bigger picture of the field.\n`;
-        md += `>    Spend roughly equal time on each — do NOT skip any."\n`;
+
+        // ── LENGTH & DEPTH RULES ──
+        md += `> ### CRITICAL LENGTH & DEPTH RULES\n`;
+        md += `> 1. EXPAND THE DIALOGUE: This must be a long-form podcast. For EVERY Learning\n`;
+        md += `>    Outcome and EVERY section, generate at least 8-10 back-and-forth dialogue\n`;
+        md += `>    turns between Host A and Host B.\n`;
+        md += `> 2. NO RUSHING: Do not rush through the concepts. If Host A explains a concept,\n`;
+        md += `>    Host B MUST interrupt to ask a clarifying question or play devil's advocate\n`;
+        md += `>    before moving on.\n`;
+        md += `> 3. DETAILED EXAMPLES: Whenever an example is needed, build a detailed\n`;
+        md += `>    mini-scenario with context, hypothetical numbers, and walk through the\n`;
+        md += `>    exact thought process.\n`;
         md += `> \n`;
-        md += `> PART 2 — Connecting the Dots (概念串聯與心智模型)\n`;
-        md += `>   "Now step back and show how ALL these outcomes connect to each other.\n`;
-        md += `>    What is the MENTAL MODEL that ties them together?\n`;
-        md += `>    Draw the conceptual map a student needs to hold in their head.\n`;
-        md += `>    Where do experts disagree or where are the common pitfalls?"\n`;
+
+        // ── EPISODE STRUCTURE ──
+        md += `> ### EPISODE STRUCTURE\n`;
         md += `> \n`;
-        md += `> PART 3 — Exam-Ready Stress Test (考試級理解力檢核)\n`;
-        md += `>   "For each Learning Outcome, pose ONE tricky question that a professor\n`;
-        md += `>    might ask to test deep understanding (not surface-level recall).\n`;
-        md += `>    After each question, walk through the model answer step by step.\n`;
-        md += `>    Highlight common misconceptions students have."\n`;
+        md += `> **PART 1 — Learning Outcome Deep-Dive (學習目標逐條解析)**\n`;
+        md += `> Go through EACH of the Learning Outcomes listed above one by one.\n`;
+        md += `> - Explain the core concept in plain, conversational language.\n`;
+        md += `> - Provide a concrete real-world example for each.\n`;
+        md += `> - Do NOT read the ULOs like a textbook; weave them naturally into the conversation.\n`;
+        md += `> - Spend roughly equal time on each — do NOT skip any.\n`;
         md += `> \n`;
-        md += `> Rules:\n`;
-        md += `> - The Learning Outcomes listed above are your NORTH STAR. Every minute of\n`;
-        md += `>   the podcast must serve at least one of them.\n`;
+        md += `> **PART 2 — Connecting the Dots & Mental Models (概念串聯與心智模型)**\n`;
+        md += `> Step back and show how all these outcomes connect.\n`;
+        md += `> - What is the MENTAL MODEL that ties them together?\n`;
+        md += `> - Draw the conceptual map a student needs to hold in their head.\n`;
+        if (reflectionQuestions.length > 0) {
+            md += `> - *Mandatory:* The hosts MUST debate or discuss the "Key Reflection Questions"\n`;
+            md += `>   provided in the Context section. Use these questions to highlight expert\n`;
+            md += `>   disagreements or common real-world trade-offs.\n`;
+        } else {
+            md += `> - Where do experts disagree or where are the common pitfalls?\n`;
+        }
+        md += `> \n`;
+        md += `> **PART 3 — Exam-Ready Stress Test (考試級理解力檢核)**\n`;
+        md += `> For each Learning Outcome, Host B (The Academic) must pose ONE tricky\n`;
+        md += `> conceptual question that tests deep understanding, not surface-level recall.\n`;
+        md += `> - Host A (The Practitioner) attempts to answer or breaks down the model answer.\n`;
+        md += `> - Explicitly highlight common misconceptions students have.\n`;
+        md += `> \n`;
+        md += `> **OUTRO — 60-Second Summary**\n`;
+        md += `> End with a concise closing summary. Host A or B should say:\n`;
+        md += `> "After listening to this episode, you should now be able to..." and restate\n`;
+        md += `> each Learning Outcome in plain, actionable language so the listener can\n`;
+        md += `> self-check their understanding.\n`;
+        md += `> \n`;
+
+        // ── STRICT RULES ──
+        md += `> ### STRICT RULES\n`;
         md += `> - Never read URLs, code syntax, or raw citations aloud.\n`;
-        md += `> - Use analogies and real-world scenarios to make abstract concepts concrete.\n`;
-        md += `> - End with a 60-second closing summary: "After listening to this episode,\n`;
-        md += `>   you should now be able to..." and restate each Learning Outcome in plain,\n`;
-        md += `>   conversational language so the listener can self-check their understanding.\n\n`;
+        md += `> - Keep the dialogue dynamic — use interruptions, agreements, and analogies.\n`;
+        md += `> - Focus purely on teaching the concepts. Do not explain how to use the course\n`;
+        md += `>   website or how to submit assignments.\n`;
+        md += `> - Use analogies and real-world scenarios to make abstract concepts concrete.\n\n`;
     }
 
     // ── Prepare Prompt Blocks ──

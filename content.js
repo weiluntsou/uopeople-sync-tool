@@ -580,18 +580,20 @@ async function fetchOverviewMetadata(bookUrl) {
 
             const topics = cleanExtracted(extractAllListsFromOfflineDoc(content, /topics?/i), false);
             const outcomes = cleanExtracted(extractAllListsFromOfflineDoc(content, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true);
+            const reflectionQuestions = extractAllListsFromOfflineDoc(content, /reflection\s+questions?|questions?\s+(?:to\s+)?consider|think\s+about|key\s+questions?/i);
 
             console.log(`📊 [Overview] Topics (clean): [${topics.join(" | ")}]`);
             console.log(`📊 [Overview] Outcomes (clean): [${outcomes.join(" | ")}]`);
+            console.log(`📊 [Overview] Reflection Questions: [${reflectionQuestions.join(" | ")}]`);
 
-            return { topics, outcomes, doc: d };
+            return { topics, outcomes, reflectionQuestions, doc: d };
         };
 
         // ① 先試書本起始頁
         const base = await fetchAndParse(baseUrl);
-        if (!base) return { topics: [], outcomes: [] };
+        if (!base) return { topics: [], outcomes: [], reflectionQuestions: [] };
         if (base.topics.length > 0 || base.outcomes.length > 0) {
-            return { topics: base.topics, outcomes: base.outcomes };
+            return { topics: base.topics, outcomes: base.outcomes, reflectionQuestions: base.reflectionQuestions || [] };
         }
 
         // ② 從 doc 中找所有含 chapterid=... 的 <a> 連結（書本章節指定樣式）
@@ -609,14 +611,14 @@ async function fetchOverviewMetadata(bookUrl) {
             const chUrl = resolveUrl(chapLink.getAttribute("href") || "", baseUrl);
             if (chUrl !== baseUrl) {
                 const ch = await fetchAndParse(chUrl);
-                if (ch) return { topics: ch.topics, outcomes: ch.outcomes };
+                if (ch) return { topics: ch.topics, outcomes: ch.outcomes, reflectionQuestions: ch.reflectionQuestions || [] };
             }
         }
 
-        return { topics: [], outcomes: [] };
+        return { topics: [], outcomes: [], reflectionQuestions: [] };
     } catch (e) {
         console.warn("fetchOverviewMetadata error:", e.message);
-        return { topics: [], outcomes: [] };
+        return { topics: [], outcomes: [], reflectionQuestions: [] };
     }
 }
 
@@ -645,6 +647,7 @@ async function fetchDeepDetail(url, title) {
         let detail = "";
         let topics = [];
         let outcomes = [];
+        let reflectionQuestions = [];
         let discussionPrompt = "";
         let assignmentInstructions = "";
 
@@ -666,6 +669,7 @@ async function fetchDeepDetail(url, title) {
                 detail = readingDetail;
                 topics = overviewMeta.topics;
                 outcomes = overviewMeta.outcomes;
+                reflectionQuestions = overviewMeta.reflectionQuestions || [];
             } else {
                 // 並行抓取：Reading 連結清單 + Overview 的 Topics/Outcomes
                 const [readingDetail, overviewMeta] = await Promise.all([
@@ -675,6 +679,7 @@ async function fetchDeepDetail(url, title) {
                 detail = readingDetail;
                 topics = overviewMeta.topics;
                 outcomes = overviewMeta.outcomes;
+                reflectionQuestions = overviewMeta.reflectionQuestions || [];
             }
         } else {
             // 一般任務（Discussion、Assignment 等）
@@ -727,10 +732,10 @@ async function fetchDeepDetail(url, title) {
             }
         }
 
-        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions, rubricText };
+        return { detail, deadline, topics, outcomes, reflectionQuestions, discussionPrompt, assignmentInstructions, rubricText };
     } catch (e) {
         console.error("fetchDeepDetail error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", rubricText: null };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], reflectionQuestions: [], discussionPrompt: "", assignmentInstructions: "", rubricText: null };
     }
 }
 
@@ -800,6 +805,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         let detail = "";
         let topics = [];
         let outcomes = [];
+        let reflectionQuestions = [];
         let discussionPrompt = "";
         let assignmentInstructions = "";
         let extractedDiscussionPrompt = "";
@@ -831,10 +837,12 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                             
                             const overviewMeta = {
                                 topics: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /topics?/i), false),
-                                outcomes: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true)
+                                outcomes: cleanExtracted(extractAllListsFromOfflineDoc(doc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true),
+                                reflectionQuestions: extractAllListsFromOfflineDoc(doc.body, /reflection\s+questions?|questions?\s+(?:to\s+)?consider|think\s+about|key\s+questions?/i)
                             };
                             topics = overviewMeta.topics;
                             outcomes = overviewMeta.outcomes;
+                            reflectionQuestions = overviewMeta.reflectionQuestions;
 
                             const extDiscussion = extractSectionByHeading(doc.body, /discussion\s+(?:assignment|forum|prompt)/i);
                             const extWritten = extractSectionByHeading(doc.body, /written\s+assignment/i);
@@ -868,10 +876,12 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
                 
                 const overviewMeta = {
                     topics: cleanExtracted(extractAllListsFromOfflineDoc(descDoc.body, /topics?/i), false),
-                    outcomes: cleanExtracted(extractAllListsFromOfflineDoc(descDoc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true)
+                    outcomes: cleanExtracted(extractAllListsFromOfflineDoc(descDoc.body, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true),
+                    reflectionQuestions: extractAllListsFromOfflineDoc(descDoc.body, /reflection\s+questions?|questions?\s+(?:to\s+)?consider|think\s+about|key\s+questions?/i)
                 };
                 topics = overviewMeta.topics;
                 outcomes = overviewMeta.outcomes;
+                reflectionQuestions = overviewMeta.reflectionQuestions;
 
                 const extDiscussion = extractSectionByHeading(descDoc.body, /discussion\s+(?:assignment|forum|prompt)/i);
                 const extWritten = extractSectionByHeading(descDoc.body, /written\s+assignment/i);
@@ -986,10 +996,10 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
             }
         }
 
-        return { detail, deadline, topics, outcomes, discussionPrompt, assignmentInstructions, extractedDiscussionPrompt, extractedAssignmentInstructions, rubricText };
+        return { detail, deadline, topics, outcomes, reflectionQuestions, discussionPrompt, assignmentInstructions, extractedDiscussionPrompt, extractedAssignmentInstructions, rubricText };
     } catch (e) {
         console.error("fetchDeepDetailD2L error:", e);
-        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], discussionPrompt: "", assignmentInstructions: "", extractedDiscussionPrompt: "", extractedAssignmentInstructions: "", rubricText: null };
+        return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], reflectionQuestions: [], discussionPrompt: "", assignmentInstructions: "", extractedDiscussionPrompt: "", extractedAssignmentInstructions: "", rubricText: null };
     }
 }
 
@@ -1211,7 +1221,7 @@ async function scanD2LPage(sendResponse) {
                 const unitName = task.unitId || "General";
 
                 if (!enrichedUnitDetails[unitName]) {
-                    enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+                    enrichedUnitDetails[unitName] = { topics: [], outcomes: [], reflectionQuestions: [] };
                 }
 
                 if (extra.topics?.length > 0) {
@@ -1219,6 +1229,9 @@ async function scanD2LPage(sendResponse) {
                 }
                 if (extra.outcomes?.length > 0) {
                     enrichedUnitDetails[unitName].outcomes = [...new Set([...enrichedUnitDetails[unitName].outcomes, ...extra.outcomes])];
+                }
+                if (extra.reflectionQuestions?.length > 0) {
+                    enrichedUnitDetails[unitName].reflectionQuestions = [...new Set([...(enrichedUnitDetails[unitName].reflectionQuestions || []), ...extra.reflectionQuestions])];
                 }
                 if (extra.extractedDiscussionPrompt) {
                     enrichedUnitDetails[unitName].extractedDiscussionPrompt = 
@@ -1296,11 +1309,13 @@ async function scanMoodlePage(sendResponse) {
 
             const topics = cleanExtracted(extractAllListsFromOfflineDoc(summaryEl, /topics?/i), false);
             const outcomes = cleanExtracted(extractAllListsFromOfflineDoc(summaryEl, /(?:learning\s+)?outcomes?|(?:learning\s+)?objectives?|goals?/i), true);
+            const reflectionQuestions = extractAllListsFromOfflineDoc(summaryEl, /reflection\s+questions?|questions?\s+(?:to\s+)?consider|think\s+about|key\s+questions?/i);
 
             unitMap[sec.id] = {
                 name: cleanMD(txt.split("\n")[0]),
                 topics,
                 outcomes,
+                reflectionQuestions,
             };
         });
 
@@ -1335,6 +1350,7 @@ async function scanMoodlePage(sendResponse) {
             enrichedUnitDetails[data.name] = {
                 topics: data.topics || [],
                 outcomes: data.outcomes || [],
+                reflectionQuestions: data.reflectionQuestions || [],
             };
         }
     }
@@ -1347,12 +1363,14 @@ async function scanMoodlePage(sendResponse) {
 
         if (extra.topics?.length > 0 || extra.outcomes?.length > 0) {
             if (!enrichedUnitDetails[unitName]) {
-                enrichedUnitDetails[unitName] = { topics: [], outcomes: [] };
+                enrichedUnitDetails[unitName] = { topics: [], outcomes: [], reflectionQuestions: [] };
             }
             if (extra.topics.length > 0)
                 enrichedUnitDetails[unitName].topics = extra.topics;
             if (extra.outcomes.length > 0)
                 enrichedUnitDetails[unitName].outcomes = extra.outcomes;
+            if (extra.reflectionQuestions?.length > 0)
+                enrichedUnitDetails[unitName].reflectionQuestions = extra.reflectionQuestions;
         }
 
         results.push({
