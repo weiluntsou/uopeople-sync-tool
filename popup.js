@@ -776,6 +776,16 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
 
     // ── Audio Prompt Callout ──
     md += `> [!🎧]- 點擊展開：生成 Podcast 的 Audio Prompt (供聆聽吸收)\n`;
+
+    // ★ 檢核：是否有成功取得 Unit Overview 的核心資料
+    const hasOverviewData = cleanedTopicsList.length > 0 || cleanedOutcomesList.length > 0;
+    if (!hasOverviewData) {
+        md += `> ⚠️ **警告：未成功取得 Unit Overview 的 Topics 及 Learning Outcomes。**\n`;
+        md += `> 產出的 Podcast 將缺乏本週核心學習重點，聽的價值大幅降低。\n`;
+        md += `> 請先確認 Learning Guide 頁面是否正確載入後重新擷取。\n`;
+        md += `> \n`;
+    }
+
     md += `> Copy the following prompt into NotebookLM's Audio Overview generation box:\n`;
     md += `> \n`;
     const cleanedCourse = getCleanedCourseName(course);
@@ -784,6 +794,16 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
         md += `> \n`;
         if (topicsSummary) {
             md += `> Focus on synthesizing these key course concepts: ${topicsSummary}\n`;
+            md += `> \n`;
+        }
+        // ★ 考試版也注入 Outcomes 作為交叉驗證參考
+        if (cleanedOutcomesList.length > 0) {
+            md += `> The following Learning Outcomes from the course should be used as\n`;
+            md += `> cross-reference checkpoints — make sure the review covers ALL of them:\n`;
+            md += `> \n`;
+            cleanedOutcomesList.forEach((outcome, i) => {
+                md += `> ${i + 1}. ${outcome}\n`;
+            });
             md += `> \n`;
         }
         md += `> You are two expert hosts doing a "Before the Exam" intensive review session.\n`;
@@ -814,28 +834,47 @@ function buildStudyGuideContent(course, unit, data, unitDetails, suffix) {
             md += `> The hosts must focus their discussion on these core topics: ${topicsSummary}\n`;
             md += `> \n`;
         }
+        // ★ 注入 Learning Outcomes — Podcast 的最大重點
+        if (cleanedOutcomesList.length > 0) {
+            md += `> CRITICAL — The following are the EXPLICIT Learning Outcomes from the\n`;
+            md += `> course Unit Overview. The ENTIRE podcast must be structured to ensure\n`;
+            md += `> the listener achieves EVERY one of these outcomes after listening:\n`;
+            md += `> \n`;
+            cleanedOutcomesList.forEach((outcome, i) => {
+                md += `> ${i + 1}. ${outcome}\n`;
+            });
+            md += `> \n`;
+        }
         md += `> You are two expert hosts — one is a senior practitioner in the field,\n`;
         md += `> the other is a sharp academic researcher. Your conversation must cover:\n`;
         md += `> \n`;
-        md += `> PART 1 — Mental Model Sprint (心智模型建立)\n`;
-        md += `>   "What are the TOP 3-5 thinking frameworks that experts in this field\n`;
-        md += `>    universally agree on? Explain each one as if teaching a smart\n`;
-        md += `>    newcomer — no jargon without explanation."\n`;
+        md += `> PART 1 — Learning Outcome Deep-Dive (學習目標逐條解析)\n`;
+        md += `>   "Go through EACH Learning Outcome listed above one by one.\n`;
+        md += `>    For each outcome: explain the core concept in plain language,\n`;
+        md += `>    give a concrete real-world example, and explain WHY this outcome\n`;
+        md += `>    matters in the bigger picture of the field.\n`;
+        md += `>    Spend roughly equal time on each — do NOT skip any."\n`;
         md += `> \n`;
-        md += `> PART 2 — The Battlefield (認知深度挖掘)\n`;
-        md += `>   "Where do the experts fundamentally disagree? Pick the 2-3 most\n`;
-        md += `>    important unsettled debates in this topic. Present both sides with\n`;
-        md += `>    their evidence and the fatal flaw of each."\n`;
+        md += `> PART 2 — Connecting the Dots (概念串聯與心智模型)\n`;
+        md += `>   "Now step back and show how ALL these outcomes connect to each other.\n`;
+        md += `>    What is the MENTAL MODEL that ties them together?\n`;
+        md += `>    Draw the conceptual map a student needs to hold in their head.\n`;
+        md += `>    Where do experts disagree or where are the common pitfalls?"\n`;
         md += `> \n`;
-        md += `> PART 3 — Real-World Deployment (實戰應用)\n`;
-        md += `>   "If a developer/student had to USE this knowledge tomorrow on a\n`;
-        md += `>    real project, what would be the single most important thing to\n`;
-        md += `>    get right? What's the classic beginner trap?"\n`;
+        md += `> PART 3 — Exam-Ready Stress Test (考試級理解力檢核)\n`;
+        md += `>   "For each Learning Outcome, pose ONE tricky question that a professor\n`;
+        md += `>    might ask to test deep understanding (not surface-level recall).\n`;
+        md += `>    After each question, walk through the model answer step by step.\n`;
+        md += `>    Highlight common misconceptions students have."\n`;
         md += `> \n`;
         md += `> Rules:\n`;
+        md += `> - The Learning Outcomes listed above are your NORTH STAR. Every minute of\n`;
+        md += `>   the podcast must serve at least one of them.\n`;
         md += `> - Never read URLs, code syntax, or raw citations aloud.\n`;
-        md += `> - Focus on architectural thinking and trade-offs, not trivia.\n`;
-        md += `> - End with one "cliffhanger" question that connects to next week's topic.\n\n`;
+        md += `> - Use analogies and real-world scenarios to make abstract concepts concrete.\n`;
+        md += `> - End with a 60-second closing summary: "After listening to this episode,\n`;
+        md += `>   you should now be able to..." and restate each Learning Outcome in plain,\n`;
+        md += `>   conversational language so the listener can self-check their understanding.\n\n`;
     }
 
     // ── Prepare Prompt Blocks ──
