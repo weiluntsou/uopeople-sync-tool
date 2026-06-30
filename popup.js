@@ -1127,23 +1127,25 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
         }
     }
 
-    // ── Parallel existence check ──
+    // ── Sequential existence check (prevents Chrome connection queue timeout) ──
     setStatus("🔍 檢查 Obsidian 中的現有檔案...");
-    const existenceResults = await Promise.allSettled(
-        pendingFiles.map(f =>
-            fetch(`${getObsidianBaseUrl()}/vault/UoPeople/${encodeURIComponent(f.baseFilename)}`, {
+    const existenceResults = [];
+    for (const f of pendingFiles) {
+        try {
+            const res = await fetch(`${getObsidianBaseUrl()}/vault/UoPeople/${encodeURIComponent(f.baseFilename)}`, {
                 method: "GET",
-                headers: { Authorization: `Bearer ${apiKey}` },
-                signal: AbortSignal.timeout(4000),
-            }).then(r => ({ filename: f.baseFilename, exists: r.ok }))
-            .catch(() => ({ filename: f.baseFilename, exists: false }))
-        )
-    );
+                headers: { Authorization: `Bearer ${apiKey}` }
+            });
+            existenceResults.push({ filename: f.baseFilename, exists: res.ok });
+        } catch (e) {
+            existenceResults.push({ filename: f.baseFilename, exists: false });
+        }
+    }
 
     const existingFilenames = new Set(
         existenceResults
-            .filter(r => r.status === 'fulfilled' && r.value.exists)
-            .map(r => r.value.filename)
+            .filter(r => r.exists)
+            .map(r => r.filename)
     );
 
     const conflictFiles = pendingFiles
