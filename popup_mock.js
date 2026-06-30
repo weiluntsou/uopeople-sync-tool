@@ -1,3 +1,21 @@
+
+const document = {
+    addEventListener: () => {},
+    getElementById: () => ({
+        innerHTML: '',
+        onclick: () => {},
+        classList: { add: () => {}, remove: () => {} },
+        querySelectorAll: () => []
+    }),
+    createElement: () => ({ classList: {add:()=>{}, remove:()=>{}}, appendChild: () => {}, dataset: {} })
+};
+let fetchCount = 0;
+const fetch = async (url) => {
+    fetchCount++;
+    return { ok: true, status: 200, text: async () => "" };
+};
+function alert(m) { console.log("ALERT:", m); }
+
 /**
  * popup.js  —  UoPeople Sync v4.0
  *
@@ -98,7 +116,7 @@ document.addEventListener("DOMContentLoaded", () => {
 // ─────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────
-function setStatus(msg) { statusEl.textContent = msg; }
+function setStatus(msg) { console.log(msg); }
 function setActionStatus(msg) {
     actionStatusEl.style.display = "block";
     actionStatusEl.textContent = msg;
@@ -1408,3 +1426,19 @@ function showFileConflictModal(conflictFiles) {
         modal.classList.add('active');
     });
 }
+(async () => {
+    try {
+        const mockCourse = "CS 3305-01";
+        const mockResults = [
+            { type: "Reading", title: "Read Chapter 1", url: "http://example.com", unitTime: "Unit 1", detail: "Read" },
+            { type: "Assignment", title: "Assignment Activity 1", url: "http://example.com", unitTime: "Unit 1", detail: "Do it", rubricText: "Rubric" }
+        ];
+        const mockDetails = {
+            "Unit 1": { topics: ["Topic 1"], outcomes: ["Outcome 1"] }
+        };
+        await uploadToObsidian(mockCourse, mockResults, mockDetails, "testkey");
+        console.log("Mock execution finished successfully. Fetch calls:", fetchCount);
+    } catch(e) {
+        console.error("MOCK EXECUTION ERROR:", e);
+    }
+})();
