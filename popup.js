@@ -588,126 +588,25 @@ Structure & Content Requirements:
 
   🎯 4. Knowledge Projectization & Systemic Integration
      - Synthesize this week's granular knowledge into a "Big Picture" conceptual map.
-     - Provide actionable instructions on how to modularize and index these core insights into a Personal Knowledge Management (PKM) system (like Obsidian).
+     - Provide actionable insights on how these concepts integrate.
+     - Identify 2 cross-disciplinary applications (e.g. how does this concept apply to Business, Tech, or Society?).
 
 ───────────────────────────────────────
 Input Data for this Unit:
 ───────────────────────────────────────
-
-Course Context:
-  - Course Name: ${course}
-
-Weekly Topics:
+Course Name: ${getCleanedCourseName(course)}
+Topics:
 ${topicsBlock}
-
 Learning Outcomes:
 ${outcomesBlock}
-
-Discussion Prompt(s):
-${discussBlock}
-
-Assignment Activity:
-${assignBlock}`;
+Assignment Details & Rubrics:
+${assignBlock}
+Discussion Prompts:
+${discussBlock}`;
 }
 
-// Upload full note to Obsidian (Unit-Centric Architecture)
-// ─────────────────────────────────────────────────
-// Helper to extract a clean slug for unit filenames
-function getUnitSlug(unitName) {
-    if (!unitName) return "Unit0";
-    const m = unitName.match(/\bUnit\s*(\d+)\b/i);
-    if (m) return `Unit${m[1]}`;
-    if (/intro/i.test(unitName) || /introduction/i.test(unitName)) return "Intro";
-    if (/final/i.test(unitName) || /exam/i.test(unitName)) return "Exam";
-    const digitMatch = unitName.match(/\d+/);
-    if (digitMatch) return `Unit${digitMatch[0]}`;
-    return "Unit0";
-}
-
-// Helper to condense topics list into a summary string
-function getCondensedTopicsSummary(cleanedTopicsList, readings) {
-    let list = [];
-    if (cleanedTopicsList && cleanedTopicsList.length > 0) {
-        list = cleanedTopicsList.slice(0, 4).map(t => t.trim());
-    } else if (readings && readings.length > 0) {
-        list = readings.slice(0, 3).map(r => {
-            return r.title
-                .replace(/^(Reading Assignment|Reading|Chapter\s+\d+|Ch\.\s*\d+)\s*[:-]?\s*/i, "")
-                .trim();
-        });
-    }
-    
-    if (list.length === 0) return "";
-    
-    const joined = list.join(", ");
-    if (joined.length > 120) {
-        return joined.substring(0, 117) + "...";
-    }
-    return joined;
-}
-
-// Detect course type from course name for dynamic micro-task generation
-function detectCourseType(course) {
-    const name = (course || "").toLowerCase();
-    if (/\b(cs|computer science|programming|algorithm|data structure|software|database|network|security|web|php|java|python|c\+\+)\b/.test(name)) return "cs";
-    if (/\b(math|calculus|statistics|algebra|probability|finance|accounting|economics)\b/.test(name)) return "math";
-    return "humanities"; // default: business, management, social sciences, etc.
-}
-
-// Build micro-task steps based on course type
-function buildMicroTasks(courseType, rubricText) {
-    // Count sub-questions from rubric (rough estimate)
-    const questionCount = rubricText
-        ? (rubricText.match(/\b(?:question|part|section|\d+\.\s)/gi) || []).length
-        : 0;
-    const extraSteps = questionCount > 3 ? "\n- [ ] 🗂️ Step 5b｜依照子題 (sub-questions) 逐一答題，每題完成後打勾" : "";
-
-    if (courseType === "cs") {
-        return `
-> 🧩 **微型拆解 (Micro-segmentation)** — 每塊 ≤ 20 分鐘可完成
-
-- [ ] 🔍 Step 1｜理解需求 **(Requirement Analysis)** — 閱讀題目，找出：輸入 (Input) / 輸出 (Output) / 限制條件 (Constraints)
-- [ ] 🗺️ Step 2｜設計架構 **(System Design / Pseudocode)** — 用偽代碼 (pseudocode) 或流程圖 (flowchart) 草擬解題邏輯
-- [ ] ⚙️ Step 3｜核心實作 **(Core Implementation)** — 撰寫主要函式 (functions) 或模組 (modules)，先求能跑再求優化
-- [ ] 🐛 Step 4｜測試與除錯 **(Testing & Debugging)** — 用邊界案例 (edge cases) 測試，修復邏輯錯誤 (logic errors)${extraSteps}
-- [ ] 📝 Step 5｜說明撰寫 **(Documentation)** — 補充程式碼注釋 (comments) 與 README 說明
-- [ ] 🔗 Step 6｜引用整理 **(References)** — 補 APA 格式引用 (APA citation) 與來源
-- [ ] ✅ Step 7｜提交前審核 **(Final Review)** — 對照下方 Checklist 逐項確認
-
-`;
-    } else if (courseType === "math") {
-        return `
-> 🧩 **微型拆解 (Micro-segmentation)** — 每塊 ≤ 20 分鐘可完成
-
-- [ ] 🔍 Step 1｜理解題目 **(Problem Decoding)** — 找出：已知條件 (given) / 求解目標 (find) / 適用定理 (theorem)
-- [ ] 🗺️ Step 2｜選定方法 **(Method Selection)** — 確認要用哪個公式 (formula) 或統計方法 (statistical method)
-- [ ] 🔢 Step 3｜逐步計算 **(Step-by-Step Calculation)** — 寫出每一步，不要跳步，便於找出錯誤 (errors)${extraSteps}
-- [ ] ✔️ Step 4｜驗算 **(Verification)** — 用不同方法或代回原式確認答案合理 (sanity check)
-- [ ] 📊 Step 5｜解讀結果 **(Interpretation)** — 用一句話說明計算結果的實際意義
-- [ ] 🔗 Step 6｜引用整理 **(References)** — 補 APA 格式引用 (APA citation)
-- [ ] ✅ Step 7｜提交前審核 **(Final Review)** — 對照下方 Checklist 逐項確認
-
-`;
-    } else {
-        // humanities / business / social sciences
-        return `
-> 🧩 **微型拆解 (Micro-segmentation)** — 每塊 ≤ 20 分鐘可完成
-
-- [ ] 🔍 Step 1｜解碼題意 **(Prompt Decoding)** — 圈出 3 個關鍵詞 (keywords)，確認論點方向 (argument direction)
-- [ ] 🗺️ Step 2｜搭建骨架 **(Outline)** — 用條列式列出論點架構 (argument structure) 與各段落主題句 (topic sentence)
-- [ ] 📚 Step 3｜素材收集 **(Research & Evidence)** — 從本週教材中找 2-3 個支持論點的段落或數據 (evidence)${extraSteps}
-- [ ] ✍️ Step 4｜初稿撰寫 **(First Draft)** — 不求完美，先把想法轉成文字，維持學術語氣 (academic tone)
-- [ ] 🔗 Step 5｜引用整理 **(Citations)** — 補 APA 格式引用 (APA citation)，每個論點都要有出處
-- [ ] 🔍 Step 6｜潤稿 **(Revision)** — 調整語氣、確認邏輯流暢，檢查連接詞 (transition words) 使用
-- [ ] ✅ Step 7｜提交前審核 **(Final Review)** — 對照下方 Checklist 逐項確認
-
-`;
-    }
-}
-
-// Helper to construct the content for the assignment draft note (v4.0 — with Micro-segmentation)
+// Helper to construct the content for the assignment draft note (v4.1 — Clean workspace)
 function buildAssignmentContent(assignmentActivity, course) {
-    const courseType = detectCourseType(course || "");
     const rubricText = assignmentActivity.rubricText || "";
 
     let md = `# ${assignmentActivity.title}\n`;
@@ -721,30 +620,16 @@ function buildAssignmentContent(assignmentActivity, course) {
         md += `⚠️ 題目未自動擷取 (Not auto-extracted)，請至上方連結複製題目後貼入此處。\n\n`;
     }
 
-    // Micro-segmentation block
-    md += buildMicroTasks(courseType, rubricText);
-
     md += `## ✍️ 我的草稿 (Draft)\n\n\n\n`;
 
     md += `## 提交前自我審核 **(Pre-submission Checklist)**\n`;
     md += `- [ ] 符合字數要求 **(Word count requirement met)**\n`;
     md += `- [ ] 已引用 APA 格式 **(APA citations included)**\n`;
     md += `- [ ] 已回應所有子問題 **(All sub-questions / parts addressed)**\n`;
-    if (courseType === "math") {
-        md += `- [ ] 已驗算所有計算步驟 **(All calculations verified)**\n`;
-        md += `- [ ] 已解釋計算結果的實際意義 **(Result interpretation provided)**\n`;
-    } else if (courseType === "cs") {
-        md += `- [ ] 程式碼可正常執行 **(Code runs without errors)**\n`;
-        md += `- [ ] 已處理邊界案例 **(Edge cases handled)**\n`;
-    } else {
-        md += `- [ ] 每個論點都有引用支持 **(Every argument is supported by evidence)**\n`;
-        md += `- [ ] 符合學術語氣 **(Academic tone maintained)**\n`;
-    }
     md += `- [ ] 已閱讀一遍確認無錯字 **(Proofread for typos and grammar)**\n`;
 
     return md;
 }
-
 
 // Helper to construct the study guide content for a unit (v4.0 — user-editable only)
 // Prompts (Audio, Chat, Feynman) have been moved to CourseSummary note.
@@ -828,16 +713,16 @@ function buildStudyGuideContent(course, unit, data, unitDetails, linkSuffix) {
         md += `> D2 上午：用 🤖 Chat Prompt 跑模擬題自測 → D2 下午：確認監考設備，最後過一遍錯題清單\n\n`;
     } else if (hasDiscussion && hasAssignment) {
         md += `> 1. **D1 上午｜建立心智模型 (Mental Model)** — 先跑 🎧 Audio Prompt，邊聽邊在 Obsidian 畫出核心框架。\n`;
-        md += `> 2. **D1 下午｜深度理解 + 費曼檢核 (Feynman Check)** — 跑 🤖 Chat Prompt 取得學習指南，貼入下方「AI 輸出」區，接著跑 🔬 費曼四段 Prompt 確認理解後撰寫討論帖初稿。\n`;
+        md += `> 2. **D1 下午｜深度理解 + 費曼檢核 (Feynman Check)** — 跑 🤖 Chat Prompt 取得學習指南，貼入下方「AI 輸出」區，並根據 AI 的引導逐步完成費曼檢核與初稿。\n`;
         md += `> 3. **D2 上午｜撰寫討論帖 (Discussion Post)** — 參考 Discussion Prompt，完成初稿並回覆同學至少 1 則。\n`;
         md += `> 4. **D2 下午｜執行作業 (Assignment)** — 打開作業筆記，依微型拆解 (Micro-segmentation) 清單逐步完成，用 Checklist 把關後提交。\n\n`;
     } else if (hasAssignment && !hasDiscussion) {
         md += `> 1. **D1 上午｜建立心智模型 (Mental Model)** — 先跑 🎧 Audio Prompt，建立本週核心框架。\n`;
-        md += `> 2. **D1 下午｜深度理解 + 費曼檢核 (Feynman Check)** — 跑 🤖 Chat Prompt 取得學習指南，貼入下方「AI 輸出」區，接著跑 🔬 費曼四段 Prompt。⚠️ Prompt 3 的盲點 (blind spots) 就是你最需要補讀的部分。\n`;
+        md += `> 2. **D1 下午｜深度理解 + 費曼檢核 (Feynman Check)** — 跑 🤖 Chat Prompt 取得學習指南，貼入下方「AI 輸出」區，並跟隨 AI 的逐步費曼檢核 (Feynman Check) 指引，找出盲點 (blind spots) 加強閱讀。\n`;
         md += `> 3. **D2 整天｜作業衝刺 (Assignment Sprint)** — 打開作業筆記，依微型拆解 (Micro-segmentation) 清單逐步完成，自我審核後提交。\n\n`;
     } else if (hasDiscussion && !hasAssignment) {
         md += `> 1. **D1 上午｜建立心智模型 (Mental Model)** — 先跑 🎧 Audio Prompt，理解本週核心概念。\n`;
-        md += `> 2. **D1 下午｜深度理解 + 費曼檢核 (Feynman Check)** — 跑 🤖 Chat Prompt 取得學習指南，貼入下方「AI 輸出」區，接著跑 🔬 費曼四段 Prompt 確認理解後撰寫討論帖初稿。\n`;
+        md += `> 2. **D1 下午｜深度理解 + 費曼檢核 (Feynman Check)** — 跑 🤖 Chat Prompt 取得學習指南，貼入下方「AI 輸出」區，並根據 AI 的引導逐步完成費曼檢核與初稿。\n`;
         md += `> 3. **D2 上午｜潤稿發文 (Post & Reply)** — 修改語氣與引用格式 (citation format)，發文後回覆至少 1 位同學。\n\n`;
     } else if (hasGradedQuiz) {
         md += `> 1. **D1｜讀材 + 建立框架** — 閱讀教材，跑 🎧 Audio Prompt 整理重點概念。\n`;
@@ -855,7 +740,7 @@ function buildStudyGuideContent(course, unit, data, unitDetails, linkSuffix) {
     md += `> 請前往 [[${courseCode}_CourseSummary${linkSuffix}]] 查看本週的：\n`;
     md += `> - 🎧 Podcast Audio Prompt（貼入 NotebookLM 生成 Podcast）\n`;
     md += `> - 🤖 Chat Prompt（貼入 AI 生成破關攻略）\n`;
-    md += `> - 🔬 費曼四段 Prompt（用於主動回憶與理解檢核）\n\n`;
+    md += `> - 🔬 逐步費曼檢核（已整合至 Chat Prompt 輸出中）\n\n`;
 
     // ── Scraped Data Dump (foldable) ──
     let scrapedContentData = "";
@@ -917,18 +802,10 @@ function buildStudyGuideContent(course, unit, data, unitDetails, linkSuffix) {
 
     // ── User-editable sections (never auto-overwritten by default) ──
     md += `---\n\n`;
-    md += `## 🧠 AI 學習指南輸出 (AI Study Guide Output)\n`;
-    md += `> 使用說明：將 🤖 Chat Prompt（在 CourseSummary）的 AI 回應貼在此處\n\n`;
-    md += `[空白，等待貼入 AI 回應]\n\n`;
+    md += `## 🧠 AI 學習指南與逐步費曼檢核 (AI Study Guide & Feynman Output)\n`;
+    md += `> 使用說明：將 🤖 Chat Prompt 的 AI 回應貼在此處。模型會在此引導你逐步進行費曼檢核，並在看筆記和寫作業的過程中，協同寫出費曼回饋。\n\n`;
+    md += `[空白，等待貼入 AI 回應與進行費曼互動]\n\n`;
 
-    md += `---\n`;
-    md += `## 🔬 費曼檢核記錄 (Feynman Check Record)\n\n`;
-    md += `### 我的核心概念解釋（Prompt 2 自填）\n`;
-    md += `[空白，使用者用自己的話寫 3–5 句]\n\n`;
-    md += `### AI 指出的盲點（Prompt 3 輸出）\n`;
-    md += `[空白，貼入 AI 回應]\n\n`;
-    md += `### 本週最強類比（Prompt 4 輸出，選 1 個）\n`;
-    md += `[空白，貼入最有共鳴的那個類比]\n\n`;
     md += `---\n\n`;
 
     md += `## ✍️ 作業草稿區 (Assignment Draft)\n`;
@@ -1191,6 +1068,10 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
             chatPrompt += `       不要假設題目內容。改為輸出：\n`;
             chatPrompt += `       「請將作業題目 (assignment prompt) 貼於此處，我將為你生成對應的執行藍圖。\n`;
             chatPrompt += `         作業頁面 URL：${assignmentUrlForPrompt}」\n\n`;
+            chatPrompt += `  🚀 5. Interactive Feynman Coach（費曼引導互動區）\n`;
+            chatPrompt += `     - 在學習指南的最後，請你拋出一個「概念核心提問 (Core Concept Question)」給學生。\n`;
+            chatPrompt += `     - 告訴學生：「請用 3-5 句話回覆你對本週核心概念的理解。收到後，我將指出你的盲點 (blind spots)，並提供 2 個日常生活類比 (everyday analogies) 幫助你鎖定記憶。」\n`;
+            chatPrompt += `     - ⚠️ 請不要一次給出所有答案，必須引導學生親自回覆來完成費曼檢核。\n\n`;
             chatPrompt += `───────────────────────────────────────\n`;
             chatPrompt += `Input Data for this Unit:\n`;
             chatPrompt += `───────────────────────────────────────\n`;
@@ -1203,55 +1084,6 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
 
         md += `> [!🤖]- 點擊展開：生成作業破關攻略的 Chat Prompt (供實作檢核)\n`;
         md += calloutLines(chatPrompt) + "\n\n";
-
-        // ── 3. Feynman Prompt ──
-        let feynmanPrompt = `⏱️ 建議時間：20 分鐘｜執行時機：D1 讀完教材後、提交作業前\n`;
-        feynmanPrompt += `使用方式：依序將四段 Prompt 貼入 Claude/Gemini，\n`;
-        feynmanPrompt += `          每段取得回應後，把你的答案記錄在 StudyGuide 的費曼記錄區。\n\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `🗺️ Prompt 1｜概念地圖 (Concept Map)（2 分鐘）\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `貼入 AI：\n\n`;
-        feynmanPrompt += `我正在學習「${unit}」，主題包含：${cleanedTopicsForPrompt || "[← 請手動填入核心主題]"}\n`;
-        feynmanPrompt += `請列出這個主題中最關鍵的 5 個知識點 (key concepts)，\n`;
-        feynmanPrompt += `並用一句話說明每個知識點「解決了什麼問題 (what problem it solves)」。\n`;
-        feynmanPrompt += `只列清單，不要解釋，不要舉例。\n\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `🧒 Prompt 2｜12 歲測試 (The 12-Year-Old Test)（5 分鐘）\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `貼入 AI：\n\n`;
-        feynmanPrompt += `我現在要向一個 12 歲的孩子解釋「${unit}」的核心概念。\n`;
-        feynmanPrompt += `請扮演那個 12 歲的孩子，在我解釋之後，\n`;
-        feynmanPrompt += `用你聽不懂的地方來反問我問題。\n\n`;
-        feynmanPrompt += `我的解釋是：\n`;
-        feynmanPrompt += `[← 先自己寫 3–5 句話解釋本週核心概念 (core concept)，再貼入 AI]\n\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `🎯 Prompt 3｜空缺尋找 (Gap Finder)（8 分鐘）\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `貼入 AI：\n\n`;
-        feynmanPrompt += `你是一位嚴格的「${unit}」專家教授。\n`;
-        feynmanPrompt += `我對這個主題的理解如下：\n`;
-        feynmanPrompt += `[← 把 Prompt 2 中你寫的解釋貼在這裡]\n\n`;
-        feynmanPrompt += `請你扮演嚴格導師 (strict mentor)，指出：\n`;
-        feynmanPrompt += `1. 我理解中最嚴重的 2 個錯誤或盲點 (blind spots)\n`;
-        feynmanPrompt += `2. 我完全忽略但很重要的 1 個概念\n`;
-        feynmanPrompt += `3. 修正我理解的最短路徑 (shortest path to correction)（一句話指引）\n`;
-        feynmanPrompt += `不要給我鼓勵，只給我精準的診斷 (diagnosis)。\n\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `🔗 Prompt 4｜類比鎖定 (Analogy Lock)（5 分鐘）\n`;
-        feynmanPrompt += `───────────────────────────────────────\n`;
-        feynmanPrompt += `貼入 AI：\n\n`;
-        feynmanPrompt += `針對「${unit}」中以下這個概念：\n`;
-        feynmanPrompt += `${firstTopicForPrompt}\n\n`;
-        feynmanPrompt += `請生成 2 個來自日常生活的類比 (everyday analogies)，\n`;
-        feynmanPrompt += `要求：類比的對象必須是一般人都經歷過的事\n`;
-        feynmanPrompt += `      （例如：煮飯、排隊、手機充電）。\n`;
-        feynmanPrompt += `格式：\n`;
-        feynmanPrompt += `類比 1：[日常情境 (daily scenario)] → [對應到概念的哪個部分 (which part of the concept)]\n`;
-        feynmanPrompt += `類比 2：[日常情境] → [對應到概念的哪個部分]`;
-
-        md += `> [!🔬]- 點擊展開：費曼主動檢索 (Feynman Active Recall)（理解確認用，讀完教材後執行）\n`;
-        md += calloutLines(feynmanPrompt) + "\n\n";
 
         md += `---\n\n`;
     }
