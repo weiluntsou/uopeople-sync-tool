@@ -1135,6 +1135,7 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
 
     // ── Sequential existence check (prevents Chrome connection queue timeout) ──
     setStatus("🔍 檢查 Obsidian 中的現有檔案...");
+    console.log("🔍 Checking", pendingFiles.length, "files for existence. baseUrl:", getObsidianBaseUrl());
     const existenceResults = [];
     for (const f of pendingFiles) {
         try {
@@ -1308,6 +1309,9 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     setStatus("📤 上傳到 Obsidian...");
     let successCount = 0;
     let failMessages = [];
+    console.log("📋 Total files to upload:", filesToUpload.length);
+    console.log("📋 Files:", filesToUpload.map(f => f.filename));
+    console.log("📋 Obsidian base URL:", getObsidianBaseUrl());
     for (const file of filesToUpload) {
         const url = `${getObsidianBaseUrl()}/vault/UoPeople/${encodeURIComponent(file.filename)}`;
         console.log(`📤 Uploading to Obsidian: ${url}`);
