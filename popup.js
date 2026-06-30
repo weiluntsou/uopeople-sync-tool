@@ -474,6 +474,17 @@ function getUnitSlug(unitName) {
     return match ? "U" + match[1] : unitName.replace(/[^a-zA-Z0-9]/g, "");
 }
 
+// Returns a short comma-joined summary of the top 3 topics (used as subtitle in prompts)
+function getCondensedTopicsSummary(cleanedTopicsList, readings) {
+    if (cleanedTopicsList && cleanedTopicsList.length > 0) {
+        return cleanedTopicsList.slice(0, 3).join(", ");
+    }
+    if (readings && readings.length > 0) {
+        return readings.slice(0, 2).map(r => r.title).join(", ");
+    }
+    return "";
+}
+
 // Generate a clean Markdown heading anchor link (compatible with Obsidian / standard markdown)
 // Obsidian strips emoji from headings when building anchors, so we must NOT include emoji in the anchor.
 // Rule: lowercase, keep only alphanumeric + spaces + hyphens, replace spaces with hyphens.
@@ -487,6 +498,15 @@ function getHeaderAnchor(unitName) {
 // Prefix every line with "> " for Obsidian callout body
 function calloutLines(text) {
     return text.split("\n").map(l => `> ${l}`).join("\n");
+}
+
+function stripCalloutPrefix(text) {
+    if (!text) return "";
+    return text.split("\n").map(line => {
+        if (line.startsWith("> ")) return line.substring(2);
+        if (line.startsWith(">")) return line.substring(1);
+        return line;
+    }).join("\n");
 }
 
 // 過濾 Learning Outcomes 雜訊
@@ -956,8 +976,11 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
             audioPart += `> - Keep the dialogue dynamic — use interruptions, agreements, and analogies.\n`;
             audioPart += `> - Focus purely on teaching the concepts.\n`;
         }
+        let cleanAudio = stripCalloutPrefix(audioPart);
         md += `> [!🎧]- 點擊展開：生成 Podcast 的 Audio Prompt (供聆聽吸收)\n`;
-        md += audioPart + "\n\n";
+        md += `> \`\`\`markdown\n`;
+        md += calloutLines(cleanAudio) + "\n";
+        md += `> \`\`\`\n\n`;
 
         // ── 2. Chat Prompt (破關攻略) ──
         // Build topics/outcomes/assign blocks (same logic as before)
@@ -1096,7 +1119,9 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
         }
 
         md += `> [!🤖]- 點擊展開：生成作業破關攻略的 Chat Prompt (供實作檢核)\n`;
-        md += calloutLines(chatPrompt) + "\n\n";
+        md += `> \`\`\`markdown\n`;
+        md += calloutLines(chatPrompt) + "\n";
+        md += `> \`\`\`\n\n`;
 
         md += `---\n\n`;
     }
