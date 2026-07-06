@@ -797,19 +797,24 @@ async function parseSyllabusPDF(fileUrl, reliableUnitsList) {
         if (!res.ok) {
             return { success: false, error: `PDF下載失敗 (HTTP ${res.status})` };
         }
-        const blob = await res.blob();
-        const base64Data = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result.split(",")[1]);
-            reader.onerror = () => reject(new Error("PDF轉Base64失敗"));
-            reader.readAsDataURL(blob);
-        });
+        const arrayBuffer = await res.arrayBuffer();
+
+        // Use PDF.js to extract text
+        pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('libs/pdf.worker.min.js');
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+        let fullText = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            fullText += content.items.map(item => item.str).join(" ") + "\n";
+        }
 
         const response = await new Promise((resolve) => {
             chrome.runtime.sendMessage(
                 { 
                     action: "parseSyllabusPDF", 
-                    pdfBase64: base64Data,
+                    text: fullText,
                     reliableUnitsList: reliableUnitsList || []
                 },
                 (res) => resolve(res)

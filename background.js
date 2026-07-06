@@ -40,42 +40,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === "parseSyllabusPDF") {
         (async () => {
             try {
-                const stored = await chrome.storage.local.get(["ai_api_key"]);
-                const apiKey = stored.ai_api_key;
-                if (!apiKey) {
-                    sendResponse({ success: false, error: "尚未設定API Key，請至擴充套件設定頁輸入" });
-                    return;
-                }
+                const stored = await chrome.storage.local.get(["ai_base_url", "ai_api_key", "ai_model"]);
+                const baseUrl = stored.ai_base_url || "http://127.0.0.1:8000/v1";
+                const apiKey  = stored.ai_api_key  || "";
+                const model   = stored.ai_model    || "gemma-4-E4B-it-qat-4bit";
 
-                const response = await fetch("https://api.anthropic.com/v1/messages", {
+                // 截斷過長的 PDF 文字，避免超過 token 上限（保留前 12000 字）
+                const text = typeof msg.text === "string" ? msg.text.slice(0, 12000) : "";
+
+                const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        "x-api-key": apiKey,
-                        "anthropic-version": "2023-06-01"
+                        ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
                     },
                     body: JSON.stringify({
-                        model: "claude-sonnet-4-6",
+                        model: model,
                         max_tokens: 2000,
                         messages: [{
                             role: "user",
-                            content: [
-                                { type: "document", source: { type: "base64", 
-                                  media_type: "application/pdf", data: msg.pdfBase64 } },
-                                { type: "text", text: SYLLABUS_PARSE_PROMPT }
-                            ]
+                            content: `${SYLLABUS_PARSE_PROMPT}\n\n[課程大綱文字內容開始]\n${text}\n[課程大綱文字內容結束]`
                         }]
                     })
                 });
 
                 const data = await response.json();
-                const textBlock = data.content?.find(b => b.type === "text");
-                if (!textBlock) {
-                    sendResponse({ success: false, error: "API未回傳文字內容" });
+                const reply = data.choices?.[0]?.message?.content;
+                if (!reply) {
+                    sendResponse({ success: false, error: "API未回傳文字內容: " + JSON.stringify(data) });
                     return;
                 }
 
-                const cleaned = textBlock.text.replace(/```json|```/g, "").trim();
+                // 嘗試抽取 JSON（支援有/無 markdown code block 兩種格式）
+                let cleaned = reply.trim();
+                const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+                if (jsonMatch) {
+                    cleaned = jsonMatch[1].trim();
+                } else {
+                    const firstBrace = cleaned.indexOf('{');
+                    const lastBrace  = cleaned.lastIndexOf('}');
+                    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+                    }
+                }
+
                 const parsed = JSON.parse(cleaned);
 
                 // ── 用可靠來源覆蓋units，取代AI可能抽取失敗的版本 ──
