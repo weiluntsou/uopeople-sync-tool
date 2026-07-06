@@ -18,13 +18,7 @@ const SYLLABUS_PARSE_PROMPT = `請閱讀以下課程大綱（Syllabus）文字�
 
 3. 找到 "Course Learning Outcomes (CLOs)" 區塊，逐一抽取 cloNumber 與 description。
 
-4. 對每一筆 gradingItems，依 associatedClos 對照 CLO清單，
-   再依CLO描述文字與Unit標題的關鍵字重疊程度，反查出 coveredUnits
-   （一個字串陣列，包含該評量項目實際涵蓋的所有Unit標題，
-   例如 ["Unit 1: Introduction to Server-Side Web Development", "Unit 2: Basics of PHP", "Unit 3: Functions, Arrays and String Manipulation"]）。
-   若無法自動配對，coveredUnits只包含該評量項目自身所屬的Unit。
-
-5. 輸出格式，嚴格採用以下JSON結構，不要加入任何說明文字、
+4. 輸出格式，嚴格採用以下JSON結構，不要加入任何說明文字、
    不要用Markdown code block包裹，直接輸出純JSON：
 
 {
@@ -33,8 +27,7 @@ const SYLLABUS_PARSE_PROMPT = `請閱讀以下課程大綱（Syllabus）文字�
       "category": "...",
       "gradeItem": "...",
       "unit": "...",
-      "associatedClos": ["CLO1", "CLO2"],
-      "coveredUnits": ["Unit 1: ...", "Unit 2: ...", "Unit 3: ..."]
+      "associatedClos": ["CLO1", "CLO2"]
     }
   ],
   "units": [
@@ -48,6 +41,37 @@ const SYLLABUS_PARSE_PROMPT = `請閱讀以下課程大綱（Syllabus）文字�
 若大綱中找不到上述任一區塊，該欄位回傳空陣列 []，不要編造內容。`;
 
 // ── Port 長連線：讓 Service Worker 保持活躍直到 AI API 回應完畢 ──
+function computeCoveredUnits(gradingItems, units, clos) {
+    const itemsList = gradingItems || [];
+    const unitsList = units || [];
+    const closList = clos || [];
+    return itemsList.map(item => {
+        const relatedClos = (item.associatedClos || [])
+            .map(cloNum => closList.find(c => c.cloNumber === cloNum))
+            .filter(Boolean);
+        
+        const coveredUnitTitles = new Set();
+        // 一定包含自己所屬的Unit
+        const ownUnit = unitsList.find(u => u.unitNumber === item.unit?.toString());
+        if (ownUnit) coveredUnitTitles.add(ownUnit.unitTitle);
+
+        // 依CLO描述文字關鍵字，比對每個Unit標題是否有明顯重疊
+        for (const clo of relatedClos) {
+            const cloWords = (clo.description || "").toLowerCase()
+                .split(/\W+/).filter(w => w.length > 4);
+            for (const unit of unitsList) {
+                const unitWords = (unit.unitTitle || "").toLowerCase()
+                    .split(/\W+/).filter(w => w.length > 4);
+                const overlap = cloWords.filter(w => unitWords.includes(w));
+                if (overlap.length >= 2) {
+                    coveredUnitTitles.add(unit.unitTitle);
+                }
+            }
+        }
+        return { ...item, coveredUnits: Array.from(coveredUnitTitles) };
+    });
+}
+
 chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== "syllabus-parser") return;
 
@@ -100,6 +124,7 @@ chrome.runtime.onConnect.addListener((port) => {
             }
 
             const parsed = JSON.parse(cleaned);
+            parsed.gradingItems = computeCoveredUnits(parsed.gradingItems, parsed.units, parsed.clos);
             port.postMessage({ success: true, data: parsed });
 
         } catch (e) {
