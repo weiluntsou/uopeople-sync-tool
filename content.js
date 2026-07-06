@@ -810,13 +810,23 @@ async function parseSyllabusPDF(fileUrl) {
             fullText += content.items.map(item => item.str).join(" ") + "\n";
         }
 
-        // 透過 background service worker 呼叫 AI API，避免 content script 
-        // 直接呼叫外部API時的CORS限制與API Key曝露風險
-        const response = await new Promise((resolve) => {
-            chrome.runtime.sendMessage(
-                { action: "parseSyllabusPDF", text: fullText },
-                (res) => resolve(res)
-            );
+        // 透過 Port 長連線呼叫 background，避免 MV3 SW 被提前終止
+        const response = await new Promise((resolve, reject) => {
+            let settled = false;
+            const port = chrome.runtime.connect({ name: "syllabus-parser" });
+            port.onMessage.addListener((msg) => {
+                if (settled) return;
+                settled = true;
+                port.disconnect();
+                resolve(msg);
+            });
+            port.onDisconnect.addListener(() => {
+                if (settled) return;
+                settled = true;
+                const err = chrome.runtime.lastError?.message || "Background port disconnected";
+                reject(new Error(err));
+            });
+            port.postMessage({ action: "parseSyllabusPDF", text: fullText });
         });
 
         if (!response || !response.success) {
@@ -828,6 +838,7 @@ async function parseSyllabusPDF(fileUrl) {
         return { success: false, error: e.message };
     }
 }
+
 
 // ─────────────────────────────────────────────
 // Deep detail fetcher for D2L using Valence APIs
@@ -1104,14 +1115,26 @@ async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
             fullText += content.items.map(item => item.str).join(" ") + "\n";
         }
         
-        console.log(`[Syllabus] Sending parsed PDF text to background worker for AI parsing...`);
-        const response = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({
-                action: "parseSyllabusPDF",
-                text: fullText
-            }, (res) => {
-                resolve(res);
+        console.log(`[Syllabus] Sending parsed PDF text to background worker via Port (long-lived connection)...`);
+        const response = await new Promise((resolve, reject) => {
+            let settled = false;
+            const port = chrome.runtime.connect({ name: "syllabus-parser" });
+
+            port.onMessage.addListener((msg) => {
+                if (settled) return;
+                settled = true;
+                port.disconnect();
+                resolve(msg);
             });
+
+            port.onDisconnect.addListener(() => {
+                if (settled) return;
+                settled = true;
+                const err = chrome.runtime.lastError?.message || "Background port disconnected unexpectedly";
+                reject(new Error(err));
+            });
+
+            port.postMessage({ action: "parseSyllabusPDF", text: fullText });
         });
         
         if (!response || !response.success) {

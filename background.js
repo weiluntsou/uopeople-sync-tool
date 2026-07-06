@@ -1,13 +1,12 @@
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.action === "parseSyllabusPDF") {
-        (async () => {
-            try {
-                 const stored = await chrome.storage.local.get(["ai_base_url", "ai_api_key", "ai_model"]);
-                 const baseUrl = stored.ai_base_url || "http://127.0.0.1:8000/v1";
-                 const apiKey = stored.ai_api_key || "";
-                 const model = stored.ai_model || "gemma-4-E4B-it-qat-4bit";
+// ─────────────────────────────────────────────────────────────────────
+// Syllabus AI Parser — Port-based (長連線) 版本
+//
+// 背景說明：MV3 Service Worker 在等待非同步 fetch 時可能被 Chrome 終止，
+// 導致 sendMessage 的 channel 關閉（"message channel closed before response"）。
+// 改用 chrome.runtime.connect() Port 連線可在 Port 存活期間保持 SW 不被回收。
+// ─────────────────────────────────────────────────────────────────────
 
-                 const SYLLABUS_PARSE_PROMPT = `請閱讀以下課程大綱（Syllabus）文字內容，並嚴格按照以下規則，只做「抽取」不做「摘要」或「詮釋」：
+const SYLLABUS_PARSE_PROMPT = `請閱讀以下課程大綱（Syllabus）文字內容，並嚴格按照以下規則，只做「抽取」不做「摘要」或「詮釋」：
 
 1. 找到標題為 "Grading Weights" 或 "Evaluation and Grading" 的表格區塊。逐列抽取：
    - category（類別）
@@ -25,7 +24,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
    例如 ["Unit 1: Introduction to Server-Side Web Development", "Unit 2: Basics of PHP", "Unit 3: Functions, Arrays and String Manipulation"]）。
    若無法自動配對，coveredUnits只包含該評量項目自身所屬的Unit。
 
-5. 輸出格式，嚴格採用以下JSON結構，不要加入任何卸載說明文字、
+5. 輸出格式，嚴格採用以下JSON結構，不要加入任何說明文字、
    不要用Markdown code block包裹，直接輸出純JSON：
 
 {
@@ -48,46 +47,63 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 若大綱中找不到上述任一區塊，該欄位回傳空陣列 []，不要編造內容。`;
 
-                 const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-                     method: "POST",
-                     headers: {
-                         "Content-Type": "application/json",
-                         ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
-                     },
-                     body: JSON.stringify({
-                         model: model,
-                         max_tokens: 2000,
-                         messages: [{
-                             role: "user",
-                             content: `${SYLLABUS_PARSE_PROMPT}\n\n[課程大綱文字內容開始]\n${msg.text}\n[課程大綱文字內容結束]`
-                         }]
-                     })
-                 });
+// ── Port 長連線：讓 Service Worker 保持活躍直到 AI API 回應完畢 ──
+chrome.runtime.onConnect.addListener((port) => {
+    if (port.name !== "syllabus-parser") return;
 
-                 const data = await response.json();
-                 const reply = data.choices?.[0]?.message?.content;
-                 if (!reply) {
-                     sendResponse({ success: false, error: "API未回傳文字內容: " + JSON.stringify(data) });
-                     return;
-                 }
+    port.onMessage.addListener(async (msg) => {
+        if (msg.action !== "parseSyllabusPDF") return;
 
-                 let cleaned = reply.trim();
-                 const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-                 if (jsonMatch) {
-                     cleaned = jsonMatch[1].trim();
-                 } else {
-                     const firstBrace = cleaned.indexOf('{');
-                     const lastBrace = cleaned.lastIndexOf('}');
-                     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                         cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-                     }
-                 }
-                 const parsed = JSON.parse(cleaned);
-                 sendResponse({ success: true, data: parsed });
-            } catch (e) {
-                sendResponse({ success: false, error: e.message });
+        try {
+            const stored = await chrome.storage.local.get(["ai_base_url", "ai_api_key", "ai_model"]);
+            const baseUrl = stored.ai_base_url || "http://127.0.0.1:8000/v1";
+            const apiKey  = stored.ai_api_key  || "";
+            const model   = stored.ai_model    || "gemma-4-E4B-it-qat-4bit";
+
+            // 截斷過長的 PDF 文字，避免超過 token 上限（保留前 12000 字）
+            const text = typeof msg.text === "string" ? msg.text.slice(0, 12000) : "";
+
+            const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
+                },
+                body: JSON.stringify({
+                    model: model,
+                    max_tokens: 2000,
+                    messages: [{
+                        role: "user",
+                        content: `${SYLLABUS_PARSE_PROMPT}\n\n[課程大綱文字內容開始]\n${text}\n[課程大綱文字內容結束]`
+                    }]
+                })
+            });
+
+            const data  = await response.json();
+            const reply = data.choices?.[0]?.message?.content;
+            if (!reply) {
+                port.postMessage({ success: false, error: "API未回傳文字內容: " + JSON.stringify(data) });
+                return;
             }
-        })();
-        return true; // 保持通道開啟以支援非同步回應
-    }
+
+            // 嘗試抽取 JSON（支援有/無 markdown code block 兩種格式）
+            let cleaned = reply.trim();
+            const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+            if (jsonMatch) {
+                cleaned = jsonMatch[1].trim();
+            } else {
+                const firstBrace = cleaned.indexOf('{');
+                const lastBrace  = cleaned.lastIndexOf('}');
+                if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+                }
+            }
+
+            const parsed = JSON.parse(cleaned);
+            port.postMessage({ success: true, data: parsed });
+
+        } catch (e) {
+            port.postMessage({ success: false, error: e.message });
+        }
+    });
 });
