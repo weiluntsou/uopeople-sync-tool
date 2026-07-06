@@ -811,6 +811,11 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         let extractedDiscussionPrompt = "";
         let extractedAssignmentInstructions = "";
 
+        if (/^syllabus$/i.test(title.trim())) {
+            // 專屬處理：Syllabus PDF 解析
+            return await fetchAndParseSyllabusPDF(orgUnitId, data, topic);
+        }
+
         if (isReadingAssignmentPage(title, topic.url)) {
             console.log(`📖 Reading topic properties: ${title}`);
             if (data.TopicType === 1 && data.Url) {
@@ -1000,6 +1005,226 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
     } catch (e) {
         console.error("fetchDeepDetailD2L error:", e);
         return { detail: `❌ Fetch failed: ${e.message}`, deadline: "N/A", topics: [], outcomes: [], reflectionQuestions: [], discussionPrompt: "", assignmentInstructions: "", extractedDiscussionPrompt: "", extractedAssignmentInstructions: "", rubricText: null };
+    }
+}
+
+// ─────────────────────────────────────────────
+// Syllabus Helpers & Main Parser
+// ─────────────────────────────────────────────
+async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
+    try {
+        const fileUrl = resolveUrl(data.Url, "https://learn.uopeople.edu");
+        console.log(`[Syllabus] Resolved Syllabus HTML Url: ${fileUrl}`);
+        
+        const fileRes = await fetch(fileUrl, { credentials: "include" });
+        if (!fileRes.ok) throw new Error(`HTML fetch failed: ${fileRes.status}`);
+        const html = await fileRes.text();
+        
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const links = Array.from(doc.querySelectorAll("a"));
+        let pdfUrl = null;
+        for (const a of links) {
+            const rawHref = a.getAttribute("href") || "";
+            const resolved = resolveUrl(rawHref, fileUrl);
+            if (resolved.split('?')[0].toLowerCase().endsWith('.pdf')) {
+                pdfUrl = resolved;
+                break;
+            }
+        }
+        
+        if (!pdfUrl) {
+            return {
+                detail: "⚠️ 未在Syllabus頁面找到PDF連結",
+                deadline: "N/A",
+                topics: [],
+                outcomes: [],
+                reflectionQuestions: [],
+                discussionPrompt: "",
+                assignmentInstructions: "",
+                extractedDiscussionPrompt: "",
+                extractedAssignmentInstructions: "",
+                rubricText: null
+            };
+        }
+        
+        console.log(`[Syllabus] Found Syllabus PDF Url: ${pdfUrl}`);
+        
+        const pdfRes = await fetch(pdfUrl, { credentials: "include" });
+        if (!pdfRes.ok) throw new Error(`PDF fetch failed: ${pdfRes.status}`);
+        const arrayBuffer = await pdfRes.arrayBuffer();
+        
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        const pdfBase64 = btoa(binary);
+        
+        console.log(`[Syllabus] Sending PDF to background worker for AI parsing...`);
+        const response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+                action: "parseSyllabusPDF",
+                pdfBase64: pdfBase64
+            }, (res) => {
+                resolve(res);
+            });
+        });
+        
+        if (!response || !response.success) {
+            const errMsg = response ? response.error : "No response from background";
+            throw new Error(errMsg);
+        }
+        
+        let courseName = document.title;
+        try {
+            const courseRes = await fetch(`/d2l/api/lp/1.60/courses/${orgUnitId}`, { credentials: "include" });
+            if (courseRes.ok) {
+                const courseData = await courseRes.json();
+                if (courseData.Name) courseName = courseData.Name;
+            }
+        } catch (e) {
+            console.warn("Failed to fetch course details for code extraction:", e);
+        }
+        courseName = courseName
+            .replace(/\s*-\s*University of the People/i, "")
+            .replace(/\s*-\s*learn\.uopeople\.edu/i, "")
+            .replace(/\s*-\s*Course Home/i, "")
+            .trim();
+        const courseCode = getCourseCode(courseName).replace(/[/\\?%*:|"<>]/g, "-").trim();
+        
+        return {
+            detail: `已解析課程基準資料，詳見 _課程基準_${courseCode}.md`,
+            deadline: "N/A",
+            topics: [],
+            outcomes: [],
+            reflectionQuestions: [],
+            discussionPrompt: "",
+            assignmentInstructions: "",
+            extractedDiscussionPrompt: "",
+            extractedAssignmentInstructions: "",
+            rubricText: null,
+            syllabusData: response.data
+        };
+    } catch (e) {
+        console.error("fetchAndParseSyllabusPDF error:", e);
+        return {
+            detail: `❌ Syllabus 解析失敗: ${e.message}`,
+            deadline: "N/A",
+            topics: [],
+            outcomes: [],
+            reflectionQuestions: [],
+            discussionPrompt: "",
+            assignmentInstructions: "",
+            extractedDiscussionPrompt: "",
+            extractedAssignmentInstructions: "",
+            rubricText: null
+        };
+    }
+}
+
+function getCourseCode(course) {
+    if (!course) return "Course";
+    let clean = course
+        .replace(/^(Homepage|Course Home|Home|Course Homepage)\s*-\s*/i, "")
+        .trim();
+    const codeMatch = clean.match(/\b([A-Z]{2,4}\s+\d{3,4}(?:-\d{2})?)\b/i);
+    if (codeMatch) {
+        return codeMatch[1].trim();
+    }
+    const parts = clean.split(/\s+-\s+/);
+    return parts[0].trim();
+}
+
+function buildSyllabusMarkdown(courseCode, courseTitle, syllabusData) {
+    let md = `# 課程基準: ${courseCode} - ${courseTitle}\n\n`;
+    
+    md += `## Course Learning Outcomes (CLOs)\n`;
+    if (syllabusData.clos && syllabusData.clos.length > 0) {
+        syllabusData.clos.forEach(clo => {
+            md += `- ${clo}\n`;
+        });
+    } else {
+        md += `N/A\n`;
+    }
+    md += `\n`;
+    
+    md += `## Grading Weights\n`;
+    md += `| Assessment Component | Weight |\n`;
+    md += `| --- | --- |\n`;
+    if (syllabusData.gradingWeights && syllabusData.gradingWeights.length > 0) {
+        syllabusData.gradingWeights.forEach(item => {
+            md += `| ${item.assessment || "N/A"} | ${item.weight || "N/A"} |\n`;
+        });
+    } else {
+        md += `| N/A | N/A |\n`;
+    }
+    md += `\n`;
+    
+    md += `## Course Schedule\n`;
+    md += `| Unit | Topic | Activities / Assignments |\n`;
+    md += `| --- | --- | --- |\n`;
+    if (syllabusData.schedule && syllabusData.schedule.length > 0) {
+        syllabusData.schedule.forEach(item => {
+            md += `| ${item.unit || "N/A"} | ${item.topic || "N/A"} | ${item.activities || item.assignments || "N/A"} |\n`;
+        });
+    } else {
+        md += `| N/A | N/A | N/A |\n`;
+    }
+    
+    return md;
+}
+
+async function writeToObsidian(filename, content) {
+    const resKey = await new Promise(r => chrome.storage.local.get(["obsidian_key"], r));
+    const apiKey = resKey.obsidian_key;
+    if (!apiKey) {
+        console.error("❌ Obsidian API Key not found in storage.");
+        return;
+    }
+    
+    const endpoints = [
+        { proto: "https", host: "127.0.0.1:27124" },
+        { proto: "http", host: "127.0.0.1:27123" }
+    ];
+    let baseUrl = "";
+    for (const endpoint of endpoints) {
+        try {
+            const res = await fetch(`${endpoint.proto}://${endpoint.host}/`, {
+                headers: { Authorization: `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(2000),
+            });
+            if (res.ok || res.status === 401 || res.status === 403) {
+                baseUrl = `${endpoint.proto}://${endpoint.host}`;
+                break;
+            }
+        } catch (e) {
+            // skip
+        }
+    }
+    
+    if (!baseUrl) {
+        console.error("❌ Could not connect to Obsidian Local REST API.");
+        return;
+    }
+    
+    const url = `${baseUrl}/vault/UoPeople/${encodeURIComponent(filename)}`;
+    try {
+        const res = await fetch(url, {
+            method: "PUT",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "text/markdown",
+            },
+            body: content,
+        });
+        if (res.ok) {
+            console.log(`✅ Successfully wrote ${filename} to Obsidian.`);
+        } else {
+            const body = await res.text().catch(() => "");
+            console.error(`❌ Failed to write ${filename} to Obsidian: HTTP ${res.status}: ${body}`);
+        }
+    } catch (e) {
+        console.error(`❌ Error writing to Obsidian:`, e);
     }
 }
 
@@ -1253,7 +1478,19 @@ async function scanD2LPage(sendResponse) {
                     discussionPrompt: extra.discussionPrompt || "",
                     assignmentInstructions: extra.assignmentInstructions || "",
                     rubricText: extra.rubricText || null,
+                    syllabusData: extra.syllabusData || null,
                 };
+
+                if (task.title.trim().toLowerCase() === "syllabus" && extra.syllabusData) {
+                    const cleanCourseName = courseName
+                        .replace(/\s*-\s*University of the People/i, "")
+                        .replace(/\s*-\s*learn\.uopeople\.edu/i, "")
+                        .replace(/\s*-\s*Course Home/i, "")
+                        .trim();
+                    const courseCode = getCourseCode(cleanCourseName).replace(/[/\\?%*:|"<>]/g, "-").trim();
+                    const mdContent = buildSyllabusMarkdown(courseCode, cleanCourseName, extra.syllabusData);
+                    await writeToObsidian(`_課程基準_${courseCode}.md`, mdContent);
+                }
             } catch (e) {
                 console.error(`Error scanning task ${task.title}:`, e);
                 results[idx] = {
