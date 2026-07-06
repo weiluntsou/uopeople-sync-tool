@@ -1164,6 +1164,9 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix, syl
                         g.unit && g.unit.toString().includes(currentUnitNum)
                     );
                     if (matchedItem && Array.isArray(matchedItem.coveredUnits) && matchedItem.coveredUnits.length > 1) {
+                        // 找出「本週以外」的其他被涵蓋Unit
+                        const otherUnits = matchedItem.coveredUnits.filter(u => u !== unit);
+
                         chatPrompt += `───────────────────────────────────────\n`;
                         chatPrompt += `⚠️ 累積測驗範圍提醒 (Cumulative Scope Alert)：\n`;
                         chatPrompt += `───────────────────────────────────────\n`;
@@ -1172,9 +1175,41 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix, syl
                         matchedItem.coveredUnits.forEach(u => {
                             chatPrompt += `  - ${u}\n`;
                         });
-                        chatPrompt += `請在執行 Step 0 章節性質窮舉清單時，一併涵蓋上述所有Unit的知識點，\n`;
-                        chatPrompt += `不要只窮舉本週（${unit}）內容。若使用者未提供上述舊Unit的教材，\n`;
-                        chatPrompt += `請在Step 0清單最上方明確提醒使用者補充相關教材。\n\n`;
+                        chatPrompt += `\n`;
+
+                        // ── 嘗試從 unitMap 中找到其他Unit的已抓取資料，附加其Topics/Outcomes ──
+                        let otherUnitsContentBlock = "";
+                        for (const otherUnitName of otherUnits) {
+                            const matchedKey = Object.keys(unitMap).find(k => 
+                                k.includes(otherUnitName) || otherUnitName.includes(k)
+                            );
+                            if (matchedKey) {
+                                const otherMeta = (unitDetails || {})[matchedKey] || {};
+                                const otherTopicsRaw = otherMeta.topics || [];
+                                const otherOutcomesRaw = otherMeta.outcomes || [];
+                                const otherTopicsClean = cleanTopics(otherTopicsRaw);
+                                const otherOutcomesClean = cleanLearningOutcomes(otherOutcomesRaw);
+                                if (otherTopicsClean.length > 0 || otherOutcomesClean.length > 0) {
+                                    otherUnitsContentBlock += `\n【${matchedKey} 補充資料】\n`;
+                                    if (otherTopicsClean.length > 0) {
+                                        otherUnitsContentBlock += `Topics:\n${otherTopicsClean.map(t => `  - ${t}`).join("\n")}\n`;
+                                    }
+                                    if (otherOutcomesClean.length > 0) {
+                                        otherUnitsContentBlock += `Learning Outcomes:\n${otherOutcomesClean.map(o => `  • ${o}`).join("\n")}\n`;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (otherUnitsContentBlock) {
+                            chatPrompt += `請在執行 Step 0 章節性質窮舉清單時，一併涵蓋本週與以下單元的知識點：\n`;
+                            chatPrompt += otherUnitsContentBlock;
+                            chatPrompt += `\n`;
+                        } else {
+                            chatPrompt += `⚠️ 尚未取得上述其他Unit的教材資料。\n`;
+                            chatPrompt += `請在Step 0清單最上方明確提醒使用者：本次評量範圍涵蓋多個Unit，\n`;
+                            chatPrompt += `建議額外提供 ${otherUnits.join("、")} 的教材或筆記內容，以確保覆蓋完整。\n\n`;
+                        }
                     }
                 }
             }
