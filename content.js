@@ -839,55 +839,11 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        // ── Syllabus 專屬處理：解析Grading Weights表格，不走一般Reading流程 ──
+        // ── Syllabus 專屬處理：統一由 fetchAndParseSyllabusPDF 處理，回傳 syllabusBasis ──
         const isSyllabusTitle = /syllabus/i.test(title.trim()) && !/quiz|test|exam|forum|guide/i.test(title.trim());
-        if (isSyllabusTitle && data.TopicType === 1 && data.Url) {
-            const fileUrl = resolveUrl(data.Url, `https://learn.uopeople.edu`);
-            console.log(`📋 偵測到Syllabus topic，開始下載並解析PDF：${fileUrl}`);
-
-            // 先fetch該html頁面，找出內嵌的PDF連結（Syllabus.html裡面通常還有一層PDF）
-            let pdfUrl = fileUrl;
-            if (fileUrl.endsWith(".html")) {
-                try {
-                    const htmlRes = await fetch(fileUrl, { credentials: "include" });
-                    if (htmlRes.ok) {
-                        const html = await htmlRes.text();
-                        const doc = new DOMParser().parseFromString(html, "text/html");
-                        const pdfLink = Array.from(doc.querySelectorAll("a")).find(a => {
-                            const href = a.getAttribute("href") || "";
-                            return href.toLowerCase().endsWith(".pdf") ||
-                                   /syllabus/i.test(a.textContent || "");
-                        });
-                        if (pdfLink) {
-                            pdfUrl = resolveUrl(pdfLink.getAttribute("href"), fileUrl);
-                        }
-                    }
-                } catch (e) {
-                    console.warn("Syllabus HTML頁面掃描PDF連結失敗:", e);
-                }
-            }
-
-            const parseResult = await parseSyllabusPDF(pdfUrl);
-            if (parseResult.success) {
-                return {
-                    detail: "已解析課程基準資料（Grading Weights / CLO對照）",
-                    deadline: "N/A",
-                    topics: [], outcomes: [], reflectionQuestions: [],
-                    discussionPrompt: "", assignmentInstructions: "",
-                    rubricText: null,
-                    syllabusBasis: parseResult.data   // ← 新增欄位，攜帶結構化解析結果
-                };
-            } else {
-                console.warn("Syllabus PDF解析失敗:", parseResult.error);
-                return {
-                    detail: `⚠️ Syllabus PDF解析失敗：${parseResult.error}`,
-                    deadline: "N/A",
-                    topics: [], outcomes: [], reflectionQuestions: [],
-                    discussionPrompt: "", assignmentInstructions: "",
-                    rubricText: null,
-                    syllabusBasis: null
-                };
-            }
+        if (isSyllabusTitle) {
+            console.log(`📋 偵測到Syllabus topic，交由 fetchAndParseSyllabusPDF 處理`);
+            return await fetchAndParseSyllabusPDF(orgUnitId, data, topic);
         }
 
         let deadline = formatD2LDate(data.DueDate);
@@ -899,11 +855,6 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         let assignmentInstructions = "";
         let extractedDiscussionPrompt = "";
         let extractedAssignmentInstructions = "";
-
-        if (isSyllabusTitle) {
-            // 專屬處理：Syllabus PDF 解析
-            return await fetchAndParseSyllabusPDF(orgUnitId, data, topic);
-        }
 
         if (isReadingAssignmentPage(title, topic.url)) {
             console.log(`📖 Reading topic properties: ${title}`);
@@ -1186,7 +1137,7 @@ async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
         const courseCode = getCourseCode(courseName).replace(/[/\\?%*:|"<>]/g, "-").trim();
         
         return {
-            detail: `已解析課程基準資料，詳見 _課程基準_${courseCode}.md`,
+            detail: `已解析課程基準資料，詳見 ${courseCode}_課程基準.md`,
             deadline: "N/A",
             topics: [],
             outcomes: [],
@@ -1196,7 +1147,7 @@ async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
             extractedDiscussionPrompt: "",
             extractedAssignmentInstructions: "",
             rubricText: null,
-            syllabusData: response.data
+            syllabusBasis: response.data   // ← 統一欄位名，供外層掃描迴圈的 scannedSyllabusBasis 收集
         };
     } catch (e) {
         console.error("fetchAndParseSyllabusPDF error:", e);
