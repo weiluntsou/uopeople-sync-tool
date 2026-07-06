@@ -843,7 +843,7 @@ async function parseSyllabusPDF(fileUrl) {
 // ─────────────────────────────────────────────
 // Deep detail fetcher for D2L using Valence APIs
 // ─────────────────────────────────────────────
-async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropboxMap) {
+async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropboxMap, courseName) {
     try {
         const ver = "1.60";
         const res = await fetch(`/d2l/api/le/${ver}/${orgUnitId}/content/topics/${topic.id}`, { credentials: "include" });
@@ -854,7 +854,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         const isSyllabusTitle = /syllabus/i.test(title.trim()) && !/quiz|test|exam|forum|guide/i.test(title.trim());
         if (isSyllabusTitle) {
             console.log(`📋 偵測到Syllabus topic，交由 fetchAndParseSyllabusPDF 處理`);
-            return await fetchAndParseSyllabusPDF(orgUnitId, data, topic);
+            return await fetchAndParseSyllabusPDF(orgUnitId, data, topic, courseName);
         }
 
         let deadline = formatD2LDate(data.DueDate);
@@ -1062,7 +1062,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
 // ─────────────────────────────────────────────
 // Syllabus Helpers & Main Parser
 // ─────────────────────────────────────────────
-async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
+async function fetchAndParseSyllabusPDF(orgUnitId, data, topic, courseNameFromCaller) {
     try {
         const fileUrl = resolveUrl(data.Url, "https://learn.uopeople.edu");
         console.log(`[Syllabus] Resolved Syllabus HTML Url: ${fileUrl}`);
@@ -1142,16 +1142,8 @@ async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
             throw new Error(errMsg);
         }
         
-        let courseName = document.title;
-        try {
-            const courseRes = await fetch(`/d2l/api/lp/1.60/courses/${orgUnitId}`, { credentials: "include" });
-            if (courseRes.ok) {
-                const courseData = await courseRes.json();
-                if (courseData.Name) courseName = courseData.Name;
-            }
-        } catch (e) {
-            console.warn("Failed to fetch course details for code extraction:", e);
-        }
+        // 優先用外層已知的 courseName，避免呼叫 LP API 產生 403
+        let courseName = courseNameFromCaller || document.title;
         courseName = courseName
             .replace(/\s*-\s*University of the People/i, "")
             .replace(/\s*-\s*learn\.uopeople\.edu/i, "")
@@ -1510,7 +1502,7 @@ async function scanD2LPage(sendResponse) {
             const task = tasks[idx];
             try {
                 console.log(`🔍 D2L Deep Scan: ${task.title}`);
-                const extra = await fetchDeepDetailD2L(orgUnitId, task, task.title, discussionMap, dropboxMap);
+                const extra = await fetchDeepDetailD2L(orgUnitId, task, task.title, discussionMap, dropboxMap, courseName);
 
                 // ── Syllabus 結果特殊處理：不進入一般results，改存入外層變數 ──
                 if (extra.syllabusBasis) {
