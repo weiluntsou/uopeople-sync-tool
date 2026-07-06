@@ -64,7 +64,7 @@ function getObsidianBaseUrl() {
 // ─── DOM refs ────────────────────────────────────
 let statusEl, actionStatusEl, progressWrap, progressBar,
     statsRow, statTasks, statLinks, statFiles,
-    scanBtn, copyBtn, downloadBtn, apiKeyInput, saveBtn;
+    scanBtn, copyBtn, downloadBtn, apiKeyInput, aiBaseUrlInput, aiApiKeyInput, aiModelSelect, saveBtn;
 
 // ─────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
@@ -80,14 +80,37 @@ document.addEventListener("DOMContentLoaded", () => {
     copyBtn = document.getElementById("copyBtn");
     downloadBtn = document.getElementById("downloadBtn");
     apiKeyInput = document.getElementById("apiKeyInput");
+    aiBaseUrlInput = document.getElementById("aiBaseUrlInput");
+    aiApiKeyInput = document.getElementById("aiApiKeyInput");
+    aiModelSelect = document.getElementById("aiModelSelect");
     saveBtn = document.getElementById("saveBtn");
 
-    chrome.storage.local.get(["obsidian_key"], (res) => {
+    chrome.storage.local.get(["obsidian_key", "ai_base_url", "ai_api_key", "ai_model"], (res) => {
         if (res.obsidian_key) {
             apiKeyInput.value = res.obsidian_key;
             obsidianApiKey = res.obsidian_key;
         }
+        const defaultBaseUrl = "http://127.0.0.1:8000/v1";
+        const defaultModel = "gemma-4-E4B-it-qat-4bit";
+        
+        aiBaseUrlInput.value = res.ai_base_url || defaultBaseUrl;
+        if (res.ai_api_key) {
+            aiApiKeyInput.value = res.ai_api_key;
+        }
+        
+        const currentModel = res.ai_model || defaultModel;
+        
+        // Populate select list and refresh from backend
+        refreshModels(aiBaseUrlInput.value, aiApiKeyInput.value || "", currentModel);
     });
+
+    // Auto refresh models when API base URL or Key is changed in UI
+    aiBaseUrlInput.onchange = () => {
+        refreshModels(aiBaseUrlInput.value, aiApiKeyInput.value, aiModelSelect.value);
+    };
+    aiApiKeyInput.onchange = () => {
+        refreshModels(aiBaseUrlInput.value, aiApiKeyInput.value, aiModelSelect.value);
+    };
 
     saveBtn.onclick = handleSaveKey;
     scanBtn.onclick = handleScan;
@@ -127,17 +150,83 @@ function enableActionBtns() {
 // ─────────────────────────────────────────────────
 async function handleSaveKey() {
     obsidianApiKey = apiKeyInput.value.trim();
-    chrome.storage.local.set({ obsidian_key: obsidianApiKey });
+    const aiBaseUrl = aiBaseUrlInput.value.trim();
+    const aiApiKey = aiApiKeyInput.value.trim();
+    const aiModel = aiModelSelect.value;
+    chrome.storage.local.set({ 
+        obsidian_key: obsidianApiKey,
+        ai_base_url: aiBaseUrl,
+        ai_api_key: aiApiKey,
+        ai_model: aiModel
+    });
 
-    setStatus("🔍 API Key saved. Testing connection...");
+    setStatus("🔍 Settings saved. Testing connection...");
     const proto = await detectObsidianProtocol(obsidianApiKey);
     if (proto) {
-        setStatus(`✅ API Key saved. Connected via ${proto.toUpperCase()}.`);
+        setStatus(`✅ Settings saved. Connected via ${proto.toUpperCase()}.`);
     } else {
         setStatus(
-            `❌ API Key saved, but cannot connect to Obsidian.\n` +
+            `❌ Settings saved, but cannot connect to Obsidian.\n` +
             `Make sure the Local REST API plugin is running in Obsidian.`
         );
+    }
+}
+
+// ─────────────────────────────────────────────────
+// Helper: Refresh LLM Models
+// ─────────────────────────────────────────────────
+async function refreshModels(baseUrl, apiKey, savedModel) {
+    if (!aiModelSelect) return;
+    const currentVal = savedModel || aiModelSelect.value || "gemma-4-E4B-it-qat-4bit";
+    
+    // Clear and set temporary loading / default option
+    aiModelSelect.innerHTML = "";
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = currentVal;
+    defaultOpt.textContent = currentVal;
+    aiModelSelect.appendChild(defaultOpt);
+    aiModelSelect.value = currentVal;
+
+    try {
+        const url = baseUrl.trim().replace(/\/$/, "");
+        if (!url) return;
+        
+        const headers = { "Content-Type": "application/json" };
+        if (apiKey && apiKey.trim()) {
+            headers["Authorization"] = `Bearer ${apiKey.trim()}`;
+        }
+
+        const res = await fetch(`${url}/models`, {
+            method: "GET",
+            headers: headers
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.data)) {
+                aiModelSelect.innerHTML = "";
+                const models = data.data.map(m => m.id);
+                
+                // Add the loaded models
+                models.forEach(modelId => {
+                    const opt = document.createElement("option");
+                    opt.value = modelId;
+                    opt.textContent = modelId;
+                    aiModelSelect.appendChild(opt);
+                });
+                
+                // Ensure default/saved model is present and selected
+                if (!models.includes(currentVal)) {
+                    const opt = document.createElement("option");
+                    opt.value = currentVal;
+                    opt.textContent = currentVal;
+                    aiModelSelect.appendChild(opt);
+                }
+                aiModelSelect.value = currentVal;
+            }
+        }
+    } catch (e) {
+        console.warn("Failed to fetch models from local LLM:", e);
     }
 }
 
@@ -197,6 +286,8 @@ async function handleScan() {
                 unitDetails = response.unitDetails || {};
                 setProgress(70);
 
+                const syllabusBasis = response.syllabusBasis || null;
+
                 // Separate external links vs UoPeople internal files
                 const { external, internal } = categorizeUrls(scannedResults);
                 externalUrls = external;
@@ -204,7 +295,7 @@ async function handleScan() {
 
                 setStatus("📤 Syncing to Obsidian...");
                 console.log("🚀 Starting uploadToObsidian...");
-                const uploadOk = await uploadToObsidian(courseName, scannedResults, unitDetails, obsidianApiKey);
+                const uploadOk = await uploadToObsidian(courseName, scannedResults, unitDetails, obsidianApiKey, syllabusBasis);
                 console.log("✅ uploadToObsidian returned:", uploadOk);
                 setProgress(100);
 
@@ -859,7 +950,7 @@ function buildStudyGuideContent(course, unit, data, unitDetails, linkSuffix) {
 //   - 🤖 Chat Prompt (破關攻略)
 //   - 🔬 費曼四段 Prompt
 // ─────────────────────────────────────────────────
-function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
+function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix, syllabusBasis) {
     const dateStr = new Date().toISOString().split("T")[0];
     const courseCode = getCourseCode(course).replace(/[/\\?%*:|"<>]/g, "-").trim();
     const cleanedCourse = getCleanedCourseName(course);
@@ -1062,6 +1153,32 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
             chatPrompt += `⚠️  若 Assignment 欄位為空：先到作業頁面複製題目，手動補在 [Assignment Details] 處\n\n`;
             chatPrompt += `作業頁面 URL：${assignmentUrlForPrompt || "(本週無作業)"}\n`;
             chatPrompt += `───────────────────────────────────────\n\n`;
+
+            // ── 課程基準資料比對：判斷本週是否為累積式評量範圍 ──
+            if (syllabusBasis && Array.isArray(syllabusBasis.gradingItems)) {
+                const unitNumMatch = unit.match(/Unit\s+(\d+)/i);
+                const currentUnitNum = unitNumMatch ? unitNumMatch[1] : null;
+
+                if (currentUnitNum) {
+                    const matchedItem = syllabusBasis.gradingItems.find(g =>
+                        g.unit && g.unit.toString().includes(currentUnitNum)
+                    );
+                    if (matchedItem && Array.isArray(matchedItem.coveredUnits) && matchedItem.coveredUnits.length > 1) {
+                        chatPrompt += `───────────────────────────────────────\n`;
+                        chatPrompt += `⚠️ 累積測驗範圍提醒 (Cumulative Scope Alert)：\n`;
+                        chatPrompt += `───────────────────────────────────────\n`;
+                        chatPrompt += `依課程大綱評量表確認，本次「${matchedItem.gradeItem}」`;
+                        chatPrompt += `實際涵蓋範圍為：\n`;
+                        matchedItem.coveredUnits.forEach(u => {
+                            chatPrompt += `  - ${u}\n`;
+                        });
+                        chatPrompt += `請在執行 Step 0 章節性質窮舉清單時，一併涵蓋上述所有Unit的知識點，\n`;
+                        chatPrompt += `不要只窮舉本週（${unit}）內容。若使用者未提供上述舊Unit的教材，\n`;
+                        chatPrompt += `請在Step 0清單最上方明確提醒使用者補充相關教材。\n\n`;
+                    }
+                }
+            }
+
             chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
             chatPrompt += `📌 UNIVERSAL CHAT PROMPT FOR ASSIGNMENT & GOALS: ${unit}\n`;
             chatPrompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -1162,7 +1279,7 @@ function buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix) {
 
 // Main upload to Obsidian orchestrator
 
-async function uploadToObsidian(course, results, unitDetails, apiKey) {
+async function uploadToObsidian(course, results, unitDetails, apiKey, syllabusBasis) {
     const dateStr = new Date().toISOString().split("T")[0];
     const courseCode = getCourseCode(course).replace(/[/\\?%*:|"<>]/g, "-").trim();
 
@@ -1344,10 +1461,39 @@ async function uploadToObsidian(course, results, unitDetails, apiKey) {
     currentHomepageFilename = homepageFileName;
     filesToUpload.push({ filename: homepageFileName, content: homepageMd });
 
+    // 若有Syllabus解析資料，額外產生獨立的課程基準檔案
+    if (syllabusBasis && Array.isArray(syllabusBasis.gradingItems)) {
+        let basisMd = `# ${courseCode} 課程基準資料\n\n`;
+        basisMd += `<!-- syllabus_parsed: ${new Date().toISOString()} -->\n\n`;
+        basisMd += `## 評量範圍對照表\n\n`;
+        basisMd += `| 評量項目 | 所屬Unit | 涵蓋CLO | 涵蓋Unit範圍 |\n`;
+        basisMd += `| :--- | :--- | :--- | :--- |\n`;
+        syllabusBasis.gradingItems.forEach(g => {
+            const clos = (g.associatedClos || []).join(", ");
+            const covered = (g.coveredUnits || []).join("; ");
+            basisMd += `| ${g.gradeItem || ""} | ${g.unit || ""} | ${clos} | ${covered} |\n`;
+        });
+
+        basisMd += `\n## Unit對照表\n\n`;
+        basisMd += `| Unit編號 | 標題 |\n| :--- | :--- |\n`;
+        (syllabusBasis.units || []).forEach(u => {
+            basisMd += `| ${u.unitNumber || ""} | ${u.unitTitle || ""} |\n`;
+        });
+
+        basisMd += `\n## CLO清單\n\n`;
+        basisMd += `| CLO編號 | 描述 |\n| :--- | :--- |\n`;
+        (syllabusBasis.clos || []).forEach(c => {
+            basisMd += `| ${c.cloNumber || ""} | ${c.description || ""} |\n`;
+        });
+
+        const basisFileName = `${courseCode}_課程基準.md`;
+        filesToUpload.push({ filename: basisFileName, content: basisMd });
+    }
+
     // CourseSummary (contains all Prompts: Audio + Chat + Feynman per unit)
     const summaryBase = `${courseCode}_CourseSummary.md`;
     const summaryFileName = resolveFilename(summaryBase);
-    const summaryContent = buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix);
+    const summaryContent = buildCourseSummaryContent(course, unitMap, unitDetails, linkSuffix, syllabusBasis);
     filesToUpload.push({ filename: summaryFileName, content: summaryContent });
 
     // StudyGuide & Assignment per unit

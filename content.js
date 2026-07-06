@@ -791,6 +791,44 @@ function formatD2LDate(isoStr) {
     }
 }
 
+async function parseSyllabusPDF(fileUrl) {
+    try {
+        const res = await fetch(fileUrl, { credentials: "include" });
+        if (!res.ok) {
+            return { success: false, error: `PDF下載失敗 (HTTP ${res.status})` };
+        }
+        const arrayBuffer = await res.arrayBuffer();
+
+        // Use PDF.js to extract text
+        pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('libs/pdf.worker.min.js');
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+        let fullText = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            fullText += content.items.map(item => item.str).join(" ") + "\n";
+        }
+
+        // 透過 background service worker 呼叫 AI API，避免 content script 
+        // 直接呼叫外部API時的CORS限制與API Key曝露風險
+        const response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage(
+                { action: "parseSyllabusPDF", text: fullText },
+                (res) => resolve(res)
+            );
+        });
+
+        if (!response || !response.success) {
+            return { success: false, error: response?.error || "背景服務未回應" };
+        }
+        return { success: true, data: response.data };
+    } catch (e) {
+        console.error("parseSyllabusPDF error:", e);
+        return { success: false, error: e.message };
+    }
+}
+
 // ─────────────────────────────────────────────
 // Deep detail fetcher for D2L using Valence APIs
 // ─────────────────────────────────────────────
@@ -800,6 +838,56 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         const res = await fetch(`/d2l/api/le/${ver}/${orgUnitId}/content/topics/${topic.id}`, { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+
+        // ── Syllabus 專屬處理：解析Grading Weights表格，不走一般Reading流程 ──
+        if (/^syllabus$/i.test(title.trim()) && data.TopicType === 1 && data.Url) {
+            const fileUrl = resolveUrl(data.Url, `https://learn.uopeople.edu`);
+            console.log(`📋 偵測到Syllabus topic，開始下載並解析PDF：${fileUrl}`);
+
+            // 先fetch該html頁面，找出內嵌的PDF連結（Syllabus.html裡面通常還有一層PDF）
+            let pdfUrl = fileUrl;
+            if (fileUrl.endsWith(".html")) {
+                try {
+                    const htmlRes = await fetch(fileUrl, { credentials: "include" });
+                    if (htmlRes.ok) {
+                        const html = await htmlRes.text();
+                        const doc = new DOMParser().parseFromString(html, "text/html");
+                        const pdfLink = Array.from(doc.querySelectorAll("a")).find(a => {
+                            const href = a.getAttribute("href") || "";
+                            return href.toLowerCase().endsWith(".pdf") ||
+                                   /syllabus/i.test(a.textContent || "");
+                        });
+                        if (pdfLink) {
+                            pdfUrl = resolveUrl(pdfLink.getAttribute("href"), fileUrl);
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Syllabus HTML頁面掃描PDF連結失敗:", e);
+                }
+            }
+
+            const parseResult = await parseSyllabusPDF(pdfUrl);
+            if (parseResult.success) {
+                return {
+                    detail: "已解析課程基準資料（Grading Weights / CLO對照）",
+                    deadline: "N/A",
+                    topics: [], outcomes: [], reflectionQuestions: [],
+                    discussionPrompt: "", assignmentInstructions: "",
+                    rubricText: null,
+                    syllabusBasis: parseResult.data   // ← 新增欄位，攜帶結構化解析結果
+                };
+            } else {
+                console.warn("Syllabus PDF解析失敗:", parseResult.error);
+                return {
+                    detail: `⚠️ Syllabus PDF解析失敗：${parseResult.error}`,
+                    deadline: "N/A",
+                    topics: [], outcomes: [], reflectionQuestions: [],
+                    discussionPrompt: "", assignmentInstructions: "",
+                    rubricText: null,
+                    syllabusBasis: null
+                };
+            }
+        }
 
         let deadline = formatD2LDate(data.DueDate);
         let detail = "";
@@ -1053,18 +1141,22 @@ async function fetchAndParseSyllabusPDF(orgUnitId, data, topic) {
         if (!pdfRes.ok) throw new Error(`PDF fetch failed: ${pdfRes.status}`);
         const arrayBuffer = await pdfRes.arrayBuffer();
         
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
+        // Use PDF.js to extract text
+        pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('libs/pdf.worker.min.js');
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+        let fullText = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            fullText += content.items.map(item => item.str).join(" ") + "\n";
         }
-        const pdfBase64 = btoa(binary);
         
-        console.log(`[Syllabus] Sending PDF to background worker for AI parsing...`);
+        console.log(`[Syllabus] Sending parsed PDF text to background worker for AI parsing...`);
         const response = await new Promise((resolve) => {
             chrome.runtime.sendMessage({
                 action: "parseSyllabusPDF",
-                pdfBase64: pdfBase64
+                text: fullText
             }, (res) => {
                 resolve(res);
             });
@@ -1233,6 +1325,7 @@ async function writeToObsidian(filename, content) {
 // ─────────────────────────────────────────────
 async function scanD2LPage(sendResponse) {
     console.log("🏁 Starting D2L REST API Scraper...");
+    let scannedSyllabusBasis = null;
     
     const url = window.location.href;
     let orgUnitId = null;
@@ -1443,6 +1536,14 @@ async function scanD2LPage(sendResponse) {
             try {
                 console.log(`🔍 D2L Deep Scan: ${task.title}`);
                 const extra = await fetchDeepDetailD2L(orgUnitId, task, task.title, discussionMap, dropboxMap);
+
+                // ── Syllabus 結果特殊處理：不進入一般results，改存入外層變數 ──
+                if (extra.syllabusBasis) {
+                    scannedSyllabusBasis = extra.syllabusBasis;
+                    results[idx] = undefined; // 確保不進入 finalResults
+                    continue;
+                }
+
                 const unitName = task.unitId || "General";
 
                 if (!enrichedUnitDetails[unitName]) {
@@ -1519,6 +1620,7 @@ async function scanD2LPage(sendResponse) {
         courseName: cleanMD(courseName),
         results: finalResults,
         unitDetails: enrichedUnitDetails,
+        syllabusBasis: scannedSyllabusBasis,   // ← 新增欄位
     });
 }
 

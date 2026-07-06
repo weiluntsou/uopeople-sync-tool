@@ -191,7 +191,8 @@
         }
 
         input[type="password"],
-        input[type="text"] {
+        input[type="text"],
+        select {
             width: 100%;
             padding: 7px 10px;
             margin-bottom: 6px;
@@ -203,7 +204,8 @@
             outline: none;
         }
 
-        input:focus {
+        input:focus,
+        select:focus {
             border-color: #2563eb;
         }
 
@@ -396,12 +398,24 @@
         <div id="actionStatus" class="status" style="display:none;"></div>
     </div>
 
-    <!-- Obsidian API Settings -->
+    <!-- Obsidian & AI Settings -->
     <div class="settings">
         <div class="section-title">⚙️ Settings</div>
         <p class="hint">Obsidian Local REST API key</p>
         <input type="password" id="apiKeyInput" placeholder="Paste your Obsidian API Key here">
-        <button id="saveBtn">💾 Save Key</button>
+        
+        <p class="hint" style="margin-top: 6px;">AI API Base URL (Local/Remote)</p>
+        <input type="text" id="aiBaseUrlInput" placeholder="e.g. http://127.0.0.1:8000/v1">
+        
+        <p class="hint" style="margin-top: 6px;">AI API Key (Optional)</p>
+        <input type="password" id="aiApiKeyInput" placeholder="API Key (if required)">
+        
+        <p class="hint" style="margin-top: 6px;">Model</p>
+        <select id="aiModelSelect">
+            <option value="gemma-4-E4B-it-qat-4bit">gemma-4-E4B-it-qat-4bit</option>
+        </select>
+        
+        <button id="saveBtn">💾 Save Settings</button>
     </div>
 
     <!-- Conflict Modal -->

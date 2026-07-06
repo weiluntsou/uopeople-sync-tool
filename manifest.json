@@ -40,9 +40,21 @@
                 "https://learn.uopeople.edu/*"
             ],
             "js": [
+                "libs/pdf.min.js",
                 "content.js"
             ],
             "run_at": "document_idle"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "libs/pdf.worker.min.js"
+            ],
+            "matches": [
+                "https://my.uopeople.edu/*",
+                "https://learn.uopeople.edu/*"
+            ]
         }
     ]
 }
