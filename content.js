@@ -840,7 +840,8 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         const data = await res.json();
 
         // ── Syllabus 專屬處理：解析Grading Weights表格，不走一般Reading流程 ──
-        if (/^syllabus$/i.test(title.trim()) && data.TopicType === 1 && data.Url) {
+        const isSyllabusTitle = /syllabus/i.test(title.trim()) && !/quiz|test|exam|forum|guide/i.test(title.trim());
+        if (isSyllabusTitle && data.TopicType === 1 && data.Url) {
             const fileUrl = resolveUrl(data.Url, `https://learn.uopeople.edu`);
             console.log(`📋 偵測到Syllabus topic，開始下載並解析PDF：${fileUrl}`);
 
@@ -899,7 +900,7 @@ async function fetchDeepDetailD2L(orgUnitId, topic, title, discussionMap, dropbo
         let extractedDiscussionPrompt = "";
         let extractedAssignmentInstructions = "";
 
-        if (/^syllabus$/i.test(title.trim())) {
+        if (isSyllabusTitle) {
             // 專屬處理：Syllabus PDF 解析
             return await fetchAndParseSyllabusPDF(orgUnitId, data, topic);
         }
@@ -1582,7 +1583,8 @@ async function scanD2LPage(sendResponse) {
                     syllabusData: extra.syllabusData || null,
                 };
 
-                if (task.title.trim().toLowerCase() === "syllabus" && extra.syllabusData) {
+                const isSyllabus = /syllabus/i.test(task.title.trim()) && !/quiz|test|exam|forum|guide/i.test(task.title.trim());
+                if (isSyllabus && extra.syllabusData) {
                     const cleanCourseName = courseName
                         .replace(/\s*-\s*University of the People/i, "")
                         .replace(/\s*-\s*learn\.uopeople\.edu/i, "")

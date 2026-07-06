@@ -71,7 +71,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                      return;
                  }
 
-                 const cleaned = reply.replace(/```json|```/g, "").trim();
+                 let cleaned = reply.trim();
+                 const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+                 if (jsonMatch) {
+                     cleaned = jsonMatch[1].trim();
+                 } else {
+                     const firstBrace = cleaned.indexOf('{');
+                     const lastBrace = cleaned.lastIndexOf('}');
+                     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                         cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+                     }
+                 }
                  const parsed = JSON.parse(cleaned);
                  sendResponse({ success: true, data: parsed });
             } catch (e) {
